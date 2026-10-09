@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>拳击原型报告</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --a: #2a78d6; --b: #eb6834; --s: #898781; --seq: #1c5cab;
+  --good: #0ca30c; --warn: #fab219; --crit: #d03b3b; --good-text: #006300;
+  --canvas: #f3f1ea; --rope: #b9b4a6; --red: #d03b3b; --blue: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --a: #3987e5; --b: #d95926; --seq: #5598e7; --good-text: #0ca30c; --canvas: #22211f; --rope: #55524b;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --a: #3987e5; --b: #d95926; --seq: #5598e7; --good-text: #0ca30c; --canvas: #22211f; --rope: #55524b;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink);
+  font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+main { max-width: 1160px; margin: 0 auto; padding: 28px 16px 64px; }
+h1 { font-size: 26px; margin: 0 0 4px; }
+h2 { font-size: 18px; margin: 40px 0 6px; }
+.meta { color: var(--ink-2); font-size: 13px; }
+.note { color: var(--ink-2); font-size: 13px; margin: 0 0 14px; max-width: 780px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 18px; }
+.tile .k { font-size: 13px; color: var(--ink-2); }
+.tile .v { font-size: 28px; font-weight: 650; line-height: 1.2; margin-top: 2px; }
+.tile .v small { font-size: 14px; color: var(--ink-2); font-weight: 400; }
+.tile .sub { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.who { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: 0; }
+.tbl-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; background: var(--surface); }
+th, td { padding: 6px 10px; border-bottom: 1px solid var(--grid); text-align: right; white-space: nowrap; }
+th { color: var(--ink-2); font-weight: 600; font-size: 12.5px; }
+td:first-child, th:first-child, td.l, th.l { text-align: left; }
+td.num { font-variant-numeric: tabular-nums; }
+td.grp { color: var(--muted); font-size: 12px; }
+td.how { color: var(--muted); font-size: 12px; text-align: left; white-space: normal; min-width: 150px; }
+.cell { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; }
+.cell .bar { width: 46px; height: 5px; background: var(--grid); border-radius: 3px; overflow: hidden; }
+.cell .bar i { display: block; height: 100%; background: var(--seq); border-radius: 3px; }
+.ok { color: var(--good-text); font-weight: 700; }
+.zero { color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--ink-2); margin: 6px 0 10px; }
+.legend i { display: inline-block; width: 14px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+.charts, .fp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; }
+.chart h3, .fp h3 { font-size: 14px; margin: 0 0 4px; font-weight: 600; }
+svg text { font-family: inherit; }
+/* 回放 */
+.player { padding: 12px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.tabs button[aria-pressed=true] { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 12px; }
+@media (max-width: 760px) { .stage { grid-template-columns: 1fr; } }
+canvas { width: 100%; display: block; background: var(--canvas); border-radius: 8px; border: 1px solid var(--border); }
+.hud { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; margin-bottom: 8px; }
+.hud .side { font-size: 12.5px; }
+.hud .side.r { text-align: right; }
+.meter { display: grid; grid-template-columns: 34px 1fr; gap: 6px; align-items: center; margin-top: 2px; }
+.side.r .meter { grid-template-columns: 1fr 34px; }
+.meter .t { color: var(--muted); font-size: 11px; }
+.meter .bar { height: 7px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+.meter .bar > div { height: 100%; border-radius: 4px; }
+.side.r .meter .bar > div { margin-left: auto; }
+.clock { font-variant-numeric: tabular-nums; font-size: 20px; font-weight: 650; text-align: center; line-height: 1.2; }
+.clock small { display: block; font-size: 12px; color: var(--ink-2); font-weight: 400; }
+.ticker { font-size: 12.5px; max-height: 420px; overflow-y: auto; }
+.ticker div { padding: 3px 0; border-bottom: 1px solid var(--grid); color: var(--ink-2); }
+.ticker b { color: var(--ink); font-weight: 600; }
+.ticker .tm { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 6px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 10px; font-size: 13px; }
+.controls input[type=range] { flex: 1 1 220px; }
+button, select { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--axis); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button:hover, select:hover { border-color: var(--muted); }
+.cards { font-size: 12.5px; color: var(--ink-2); margin-top: 8px; }
+.cards2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
+.ccard h3 { margin: 0 0 2px; font-size: 16px; }
+.ccard .sub { color: var(--ink-2); font-size: 13px; margin-bottom: 10px; }
+.kv { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 12px; font-size: 12.5px; margin-bottom: 12px; }
+.kv span { color: var(--muted); display: block; font-size: 11.5px; }
+.skill { display: grid; grid-template-columns: 88px 1fr 36px; gap: 8px; align-items: center; font-size: 12px; margin: 2px 0; }
+.skill .track { position: relative; height: 7px; background: var(--grid); border-radius: 4px; }
+.skill .track i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; }
+.skill .track b { position: absolute; top: -3px; width: 2px; height: 13px; background: var(--ink); opacity: 0.6; }
+.skill.sig { font-weight: 650; }
+.sect { font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+.habit { font-size: 13px; margin: 6px 0; color: var(--ink-2); }
+.habit b { color: var(--ink); font-weight: 600; }
+.tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; border: 1px solid var(--axis); color: var(--ink-2); margin-left: 4px; }
+.tag.hot { border-color: var(--crit); color: var(--crit); }
+code { font-size: 12px; background: var(--grid); padding: 1px 5px; border-radius: 4px; word-break: break-all; }
+.records li { margin: 4px 0; font-size: 13px; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<main>
+  <h1>拳击原型报告</h1>
+  <div class="meta" id="meta"></div>
+  <div class="tiles" id="tiles"></div>
+
+  <h2>角色卡</h2>
+  <p class="note">影响一场发挥的东西都在这里：流派、架势、站架、身体、性格、熟练度。熟练度的竖线是天赋（出身 + 流派），色条是现在练到的水平，加粗的是招牌技（现在最熟的三项）。</p>
+  <div class="cards2" id="cards"></div>
+
+  <h2>技术使用表</h2>
+  <p class="note">验收标准是"能在对局里成功使用拳击的全部技术"。每个技术按它在现实里的作用定义"成功"：拳要打中、格挡要挡住、闪躲要躲开、轴转要转出角度、虚晃要骗出对手的防守动作。格子里是"成功 / 用过"，条是成功率。</p>
+  <div class="tbl-wrap"><table id="tech"></table></div>
+
+  <h2>战绩</h2>
+  <p class="note">胜负只有 KO、TKO、点数判定三种。体力、体能、心态都只是资源池。</p>
+  <div class="tbl-wrap"><table id="results"></table></div>
+
+  <h2>打法对比</h2>
+  <p class="note">两个实验体各自打同一个标准陪练。"差异"是效应量，绝对值 0.8 以上算大。</p>
+  <div class="tbl-wrap"><table id="style"></table></div>
+  <div class="fp-grid" id="fp" style="margin-top:14px"></div>
+
+  <h2>习惯</h2>
+  <p class="note">从 A 对 B 的比赛里统计出来的习惯。习惯会被对手读出来、抓住。</p>
+  <div class="cards2" id="habits"></div>
+
+  <h2>成长曲线</h2>
+  <p class="note">训练过程中每存一个版本，就拉去和标准陪练、和对方打一轮。</p>
+  <div class="legend" id="growth-legend"></div>
+  <div class="charts" id="charts"></div>
+
+  <h2>赛前战术会议</h2>
+  <p class="note">角落把每个战术计划拿去和对手模拟打一回合，按赢面排名，选第一名开场；比赛中某一回合多数裁判判输了，就换排名里的下一个。计划只限制一部分选择，不改奖励。</p>
+  <div class="cards2" id="plans"></div>
+
+  <h2>回放</h2>
+  <p class="note">俯视擂台，红蓝是两个角。回放档只存开局站位和双方每一帧的动作，画面是重新模拟算出来的，结果已经和存档核对过。</p>
+  <div class="card player">
+    <div class="tabs" id="tabs"></div>
+    <div class="hud"><div class="side" id="hudL"></div><div class="clock" id="clock"></div><div class="side r" id="hudR"></div></div>
+    <div class="stage">
+      <div>
+        <canvas id="cv"></canvas>
+        <div class="controls">
+          <button id="play">▶ 播放</button>
+          <button id="prev" title="上一帧">◀</button>
+          <button id="next" title="下一帧">▶</button>
+          <button id="jump" title="跳到下一个重拳、击倒或闪躲">下一个看点 ⏭</button>
+          <input type="range" id="scrub" min="0" value="0" aria-label="时间轴">
+          <label>速度 <select id="speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+          <label><input type="checkbox" id="showRange"> 射程</label>
+        </div>
+      </div>
+      <div class="card ticker" id="ticker"></div>
+    </div>
+    <div class="cards" id="scorecards"></div>
+  </div>
+
+  <h2>记录</h2>
+  <ul class="records" id="records"></ul>
+</main>
+
+<script id="data" type="application/json">/*__DATA__*/null</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmt = (v, d = 2) => (v == null || Number.isNaN(v)) ? '–' : (+v).toFixed(d);
+const NAME = { A: D.bodies.A.label, B: D.bodies.B.label, S: D.bodies.S.label };
+const COLOR = { A: '--a', B: '--b', S: '--s' };
+const ACT = D.sim.actions, PH = D.sim.phases;
+const PUNCH = ACT.slice(7, 19);
+const DEFNAME = { 13: '拍开', 14: '侧闪躲过', 15: '下潜躲过', 16: '后仰躲过' };
+const DASH = ['', '6 4', '2 3'];
+
+// ---------------------------------------------------------------- 顶部
+document.getElementById('meta').textContent =
+  `${D.run.name} · 版本 v${String(D.run.version).padStart(4, '0')} · 每个角色训练 ${(D.run.ticks / 1e6).toFixed(1)}M 帧 · 每组 ${D.n} 场 × 3 回合 · 模拟器 ${D.sim.version} · 生成于 ${D.generated}`;
+(function tiles() {
+  const t = D.tech, r = D.results;
+  const win = x => x.KO + x.TKO + x['判定'];
+  const tile = (k, v, sub) => `<div class="card tile"><div class="k">${k}</div><div class="v">${v}</div><div class="sub">${sub}</div></div>`;
+  document.getElementById('tiles').innerHTML =
+    tile(`<span class="who" style="background:var(--a)"></span>A 会用的技术`, `${t.A_vs_S.coverage[0]}<small> / ${t.A_vs_S.coverage[1]}</small>`, `对陪练；对 B 时 ${t.AvB_A.coverage[0]} 种`) +
+    tile(`<span class="who" style="background:var(--b)"></span>B 会用的技术`, `${t.B_vs_S.coverage[0]}<small> / ${t.B_vs_S.coverage[1]}</small>`, `对陪练；对 A 时 ${t.AvB_B.coverage[0]} 种`) +
+    tile('对标准陪练', `A ${win(r.AvS)} · B ${win(r.BvS)}<small> / ${D.n}</small>`, `提前结束 A ${r.AvS.KO + r.AvS.TKO} 场、B ${r.BvS.KO + r.BvS.TKO} 场`) +
+    tile('A 对 B', `${win(r.AvB_A)} : ${win(r.AvB_B)}`, `平局 ${r.AvB_A['平局']} 场；提前结束 ${r.AvB_A.KO + r.AvB_A.TKO + r.AvB_B.KO + r.AvB_B.TKO} 场`);
+})();
+
+// ---------------------------------------------------------------- 角色卡、习惯、战术
+(function cards() {
+  const T = D.tech_names;
+  document.getElementById('cards').innerHTML = ['A', 'B'].map(w => {
+    const c = D.cards[w], top = c.skills.map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]).slice(0, 3).map(x => x[1]);
+    const temper = c.temper.map((v, i) => `<div class="skill"><span>${D.temper_names[i]}</span><span class="track"><i style="width:${v * 100}%;background:var(--seq)"></i></span><span>${v.toFixed(2)}</span></div>`).join('');
+    const sk = c.skills.map((v, i) => `<div class="skill ${top.includes(i) ? 'sig' : ''}"><span>${esc(T[i])}</span><span class="track"><i style="width:${v * 100}%;background:var(${COLOR[w]})"></i><b style="left:calc(${c.talent[i] * 100}% - 1px)"></b></span><span>${v.toFixed(2)}</span></div>`).join('');
+    return `<div class="card ccard"><h3><span class="who" style="background:var(${COLOR[w]})"></span>${esc(c.label)}</h3>
+      <div class="sub">流派 ${esc(c.school)} · 默认架势 ${esc(c.posture)} · ${esc(c.stance)} · 属性总分 ${c.budget[0]} / 预算 ${c.budget[1]}</div>
+      <div class="kv">${c.body.map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('')}</div>
+      <div class="sect">性格与心智</div>${temper}<div class="sect">熟练度</div>${sk}</div>`;
+  }).join('');
+  document.getElementById('habits').innerHTML = ['A', 'B'].map(w => `<div class="card"><h3 style="margin:0 0 6px;font-size:14px"><span class="who" style="background:var(${COLOR[w]})"></span>${esc(NAME[w])}</h3>` +
+    (D.habits[w].length ? D.habits[w].map(h => `<div class="habit"><b>${esc(h.title)}</b>：${h.items.map(([k, v]) => `${esc(k)} ${(v * 100).toFixed(0)}%`).join('，')} <span class="zero">（${h.n} 次）</span></div>`).join('') : '<div class="habit">样本太少</div>') + '</div>').join('');
+  document.getElementById('plans').innerHTML = ['A', 'B'].map(w => `<div class="card"><h3 style="margin:0 0 6px;font-size:14px"><span class="who" style="background:var(${COLOR[w]})"></span>${esc(NAME[w])}</h3><table><thead><tr><th class="l">计划</th><th>赢面</th></tr></thead><tbody>` +
+    D.plans[w].map(([p, sc], i) => `<tr><td>${esc(D.plans.names[p])}${i === 0 ? ' <span class="ok">✓ 开场用</span>' : ''}</td><td class="num">${sc.toFixed(2)}</td></tr>`).join('') + '</tbody></table></div>').join('');
+})();
+
+// ---------------------------------------------------------------- 技术使用表
+(function tech() {
+  const cols = [['A_vs_S', 'A · 对陪练'], ['B_vs_S', 'B · 对陪练'], ['AvB_A', 'A · 对 B'], ['AvB_B', 'B · 对 A']];
+  let h = `<thead><tr><th class="l">类别</th><th class="l">技术</th>${cols.map(c => `<th>${c[1]}</th>`).join('')}<th class="l">怎么算成功</th></tr></thead><tbody>`;
+  const rows = D.tech.A_vs_S.rows;
+  rows.forEach((r, i) => {
+    h += `<tr><td class="grp">${esc(r[0])}</td><td class="l">${esc(r[1])}</td>`;
+    for (const [k] of cols) {
+      const [, , used, ok] = D.tech[k].rows[i];
+      if (ok == null) h += `<td class="num">${used ? used : '<span class="zero">0</span>'} <span class="zero">次</span></td>`;
+      else if (used == null) h += `<td class="num ${ok ? 'ok' : 'zero'}">${ok}</td>`;
+      else {
+        const rate = used ? ok / used : 0;
+        h += `<td class="num"><span class="cell"><span class="${ok ? 'ok' : 'zero'}">${ok}</span><span class="zero">/ ${used}</span><span class="bar"><i style="width:${(rate * 100).toFixed(0)}%"></i></span></span></td>`;
+      }
+    }
+    h += `<td class="how">${esc(r[4])}</td></tr>`;
+  });
+  document.getElementById('tech').innerHTML = h + '</tbody>';
+})();
+
+// ---------------------------------------------------------------- 战绩、打法
+(function results() {
+  const rows = [['A 对标准陪练', D.results.AvS], ['B 对标准陪练', D.results.BvS], ['A 对 B（A 的视角）', D.results.AvB_A], ['B 对 A（B 的视角）', D.results.AvB_B]];
+  let h = '<thead><tr><th class="l">对阵</th><th>KO 胜</th><th>TKO 胜</th><th>判定胜</th><th>平局</th><th>输</th></tr></thead><tbody>';
+  for (const [n, r] of rows) h += `<tr><td>${n}</td><td class="num">${r.KO}</td><td class="num">${r.TKO}</td><td class="num">${r['判定']}</td><td class="num">${r['平局']}</td><td class="num">${r['输']}</td></tr>`;
+  document.getElementById('results').innerHTML = h + '</tbody>';
+  let s = `<thead><tr><th class="l">指标</th><th>A ${esc(NAME.A)}</th><th>B ${esc(NAME.B)}</th><th>差异</th></tr></thead><tbody>`;
+  for (const r of D.style) s += `<tr><td>${esc(r.label)}</td><td class="num">${fmt(r.A)}</td><td class="num">${fmt(r.B)}</td><td class="num ${Math.abs(r.d) >= 0.8 ? 'ok' : ''}">${fmt(r.d)}</td></tr>`;
+  document.getElementById('style').innerHTML = s + '</tbody>';
+})();
+
+function heatmap(fp, occ, who) {
+  const bins = D.dist_bins, nb = bins.length - 1, G = D.groups;
+  const W = 520, L = 82, R = 8, T = 6, cell = 18, H = T + G.length * cell + 50, cw = (W - L - R) / nb;
+  const x = g => L + (g - bins[0]) / (bins[nb] - bins[0]) * (W - L - R);
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(NAME[who])} 打法指纹">`;
+  G.forEach((g, ri) => {
+    const y = T + ri * cell;
+    s += `<text x="${L - 8}" y="${y + cell / 2 + 4}" text-anchor="end" font-size="11.5" fill="var(--ink-2)">${g}</text>`;
+    for (let b = 0; b < nb; b++) {
+      const v = fp[ri][b], empty = occ[b] < 0.002;
+      s += `<rect x="${x(bins[b]) + 1}" y="${y + 1}" width="${cw - 2}" height="${cell - 2}" rx="2" fill="${empty ? 'var(--grid)' : 'var(--seq)'}" fill-opacity="${empty ? 0.35 : (0.04 + 0.96 * Math.min(1, v * 1.6)).toFixed(3)}"><title>距离 ${bins[b].toFixed(1)}–${bins[b + 1].toFixed(1)} 米 · ${g} ${empty ? '（几乎没站过）' : (v * 100).toFixed(0) + '%'}</title></rect>`;
+    }
+  });
+  const yb = T + G.length * cell + 6, mo = Math.max(...occ, 1e-6);
+  for (let b = 0; b < nb; b++) {
+    const h = occ[b] / mo * 14;
+    s += `<rect x="${x(bins[b]) + 1}" y="${yb + 14 - h}" width="${cw - 2}" height="${Math.max(h, 0.5)}" rx="1.5" fill="var(${COLOR[who]})"><title>站在 ${bins[b].toFixed(1)}–${bins[b + 1].toFixed(1)} 米的时间 ${(occ[b] * 100).toFixed(1)}%</title></rect>`;
+  }
+  s += `<text x="${L - 8}" y="${yb + 12}" text-anchor="end" font-size="11" fill="var(--muted)">站位</text>`;
+  for (let b = 0; b <= nb; b += 2) s += `<text x="${x(bins[b])}" y="${yb + 30}" text-anchor="middle" font-size="11" fill="var(--muted)">${bins[b].toFixed(1)}</text>`;
+  s += `<text x="${W - R}" y="${yb + 44}" text-anchor="end" font-size="11" fill="var(--muted)">与对手的距离（米）→</text>`;
+  return s + '</svg>';
+}
+document.getElementById('fp').innerHTML = ['A', 'B'].map(w =>
+  `<div class="card fp"><h3><span class="who" style="background:var(${COLOR[w]})"></span>${esc(NAME[w])} 打法指纹（对陪练）</h3>${heatmap(D.fingerprints[w].fp, D.fingerprints[w].occ, w)}</div>`).join('');
+
+// ---------------------------------------------------------------- 成长曲线
+function lineChart(title, series, yLab, yMin, yMax, fmtY) {
+  const W = 520, H = 240, L = 46, R = 14, T = 14, B = 38;
+  const xMax = Math.max(...series.flatMap(s => s.pts.map(p => p[0])), 1e-6);
+  const X = v => L + v / xMax * (W - L - R), Y = v => T + (1 - (v - yMin) / (yMax - yMin)) * (H - T - B);
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(title)}">`;
+  for (let i = 0; i <= 4; i++) {
+    const v = yMin + (yMax - yMin) * i / 4, y = Y(v);
+    s += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="var(--grid)"/><text x="${L - 6}" y="${y + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${fmtY(v)}</text>`;
+  }
+  s += `<line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" stroke="var(--axis)"/>`;
+  for (let i = 0; i <= 4; i++) s += `<text x="${X(xMax * i / 4)}" y="${H - B + 16}" text-anchor="middle" font-size="11" fill="var(--muted)">${(xMax * i / 4).toFixed(xMax < 8 ? 1 : 0)}M</text>`;
+  s += `<text x="${W - R}" y="${H - 6}" text-anchor="end" font-size="11" fill="var(--muted)">训练帧数 →</text><text x="${L}" y="${T - 3}" font-size="11" fill="var(--muted)">${esc(yLab)}</text>`;
+  for (const sr of series) {
+    s += `<path d="${sr.pts.map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join('')}" fill="none" stroke="var(${sr.color})" stroke-width="2" stroke-dasharray="${sr.dash}" stroke-linejoin="round"/>`;
+    for (const p of sr.pts) s += `<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="7" fill="transparent"><title>${esc(sr.name)} · v${String(p[2]).padStart(4, '0')} · ${fmtY(p[1])}</title></circle>`;
+  }
+  return `<div class="card chart"><h3>${esc(title)}</h3>${s}</svg></div>`;
+}
+(function growth() {
+  const g = D.growth, mk = (key, who) => ({ name: NAME[who], color: COLOR[who], dash: '', pts: g.map(p => [p.ticks, p[key], p.v]) });
+  const pct = v => (v * 100).toFixed(0) + '%';
+  document.getElementById('charts').innerHTML =
+    lineChart('会用的技术数（对陪练）', [mk('A_cov', 'A'), mk('B_cov', 'B')], '种', 0, D.tech.A_vs_S.coverage[1], v => v.toFixed(0)) +
+    lineChart('对标准陪练的胜率', [mk('A_win', 'A'), mk('B_win', 'B')], '胜率', 0, 1, pct) +
+    lineChart('对标准陪练的提前结束率（KO+TKO）', [mk('A_fin', 'A'), mk('B_fin', 'B')], '比例', 0, 1, pct) +
+    lineChart('A 对 B 的胜率', [mk('AvB_A', 'A'), mk('AvB_B', 'B')], '胜率（其余为平局）', 0, 1, pct);
+  const PAL = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4'];
+  for (const w of ['A', 'B']) {
+    const h = D.skill_hist[w];
+    if (!h || h.length < 2) continue;
+    const first = h[0][2], last = h[h.length - 1][2];
+    const idx = first.map((v, i) => [Math.abs(last[i] - v), i]).sort((a, b) => b[0] - a[0]).slice(0, 5).map(x => x[1]);
+    idx.forEach((_, n) => document.documentElement.style.setProperty('--c' + n, PAL[n]));
+    const ser = idx.map((ti, n) => ({ name: D.tech_names[ti], color: '--c' + n, dash: '', pts: h.map(p => [p[1], p[2][ti], p[0]]) }));
+    const legend = '<div class="legend">' + ser.map((s2, n) => `<span><i style="background:${PAL[n]}"></i>${esc(s2.name)}</span>`).join('') + '</div>';
+    document.getElementById('charts').insertAdjacentHTML('beforeend',
+      lineChart(`${NAME[w]} · 熟练度变化最大的 5 项`, ser, '熟练度', 0, 1, v => v.toFixed(2)).replace(/<\/svg><\/div>$/, '</svg>' + legend + '</div>'));
+  }
+  document.getElementById('growth-legend').innerHTML = ['A', 'B'].map(w => `<span><i style="background:var(${COLOR[w]})"></i>${esc(NAME[w])}</span>`).join('');
+})();
+
+// ---------------------------------------------------------------- 回放
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const P = { rep: null, t: 0, playing: false, speed: 1, last: 0 };
+const RING = D.sim.RING, BR = D.sim.BODY_R, SH = D.sim.SHOULDER, DT = D.sim.DT, RT = D.sim.ROUND_TICKS;
+// 帧格式：x y th 体力 晕眩 体能 心态 状态 招 架子 出拳 结果 伤害 动作 倒地 躲闪 反击 被晃
+const F = { x: 0, y: 1, th: 2, hp: 3, stun: 4, stam: 5, comp: 6, ph: 7, mv: 8, g: 9, fired: 10, oc: 11, dmg: 12, act: 13, kd: 14, ev: 15, ctr: 16, fk: 17, post: 18, st: 19, tilt: 20, plan: 21 };
+
+function prep(rep) {
+  const n = rep.frames.length, since = [], fmove = [], suT = [];
+  const last = [-99, -99], lm = [0, 0], st = [-1, -1];
+  for (let t = 0; t < n; t++) {
+    const a = [0, 0], b = [0, 0], c = [-1, -1];
+    for (let k = 0; k < 2; k++) {
+      const f = rep.frames[t].f[k];
+      if (f[F.fired] > 0) { last[k] = t; lm[k] = f[F.fired] - 1; }
+      const prev = t ? rep.frames[t - 1].f[k][F.ph] : 0;
+      if (f[F.ph] === 1 && prev !== 1) st[k] = t;
+      a[k] = t - last[k]; b[k] = lm[k]; c[k] = f[F.ph] === 1 ? t - st[k] : -1;
+    }
+    since.push(a); fmove.push(b); suT.push(c);
+  }
+  Object.assign(rep, { since, fmove, suT, ids: rep.bodies.map(b => b.id) });
+  // 事件列表
+  rep.events = [];
+  const clock = t => { const fr = rep.frames[t]; const s = fr.t * DT; return `R${fr.r + 1} ${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`; };
+  for (let t = 1; t < n; t++) for (let k = 0; k < 2; k++) {
+    const f = rep.frames[t].f[k], who = rep.ids[k], opp = rep.ids[1 - k];
+    const nm = who === 'S' ? '陪练' : who, on = opp === 'S' ? '陪练' : opp;
+    if (f[F.kd]) rep.events.push({ t, big: 3, text: `<b>${nm} 被击倒！</b>` });
+    if (f[F.fired] && f[F.oc] === 1 && (f[F.ctr] || f[F.dmg] >= 8)) rep.events.push({ t, big: f[F.ctr] ? 2 : 1, text: `${nm} ${f[F.ctr] ? '<b>反击</b>' : ''}${PUNCH[f[F.fired] - 1]}打中 −${f[F.dmg]}` });
+    if (f[F.ev] >= 13) rep.events.push({ t, big: 1, text: `${nm} ${DEFNAME[f[F.ev]]}` });
+    if (f[F.fk]) rep.events.push({ t, big: 1, text: `${nm} 被${on}的虚晃骗到` });
+  }
+  rep.events.forEach(e => e.clock = clock(e.t));
+  return rep;
+}
+
+function size() {
+  const w = cv.clientWidth, dpr = window.devicePixelRatio || 1;
+  cv.width = w * dpr; cv.height = w * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return w;
+}
+
+function drawFighter(k, t, a, geo) {
+  const rep = P.rep, fr = rep.frames[t].f[k], nx = rep.frames[Math.min(t + 1, rep.frames.length - 1)].f[k];
+  const body = rep.bodies[k], st = fr[F.st] < 0 ? -1 : 1, post = fr[F.post];
+  const lerpA = (p, q) => p + (((q - p + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI) * a;
+  const x = fr[F.x] + (nx[F.x] - fr[F.x]) * a, y = fr[F.y] + (nx[F.y] - fr[F.y]) * a, th = lerpA(fr[F.th], nx[F.th]);
+  const fw = [Math.cos(th), Math.sin(th)], lf = [-Math.sin(th), Math.cos(th)];
+  const pt = (f, l) => geo.P(x + fw[0] * f + lf[0] * l, y + fw[1] * f + lf[1] * l);
+  const col = css(COLOR[rep.ids[k]]), ink = css('--ink'), s = geo.s;
+  const ph = fr[F.ph], mv = fr[F.mv];
+  if (document.getElementById('showRange').checked) {
+    const r = BR + SH + D.sim.RNG[0] * body.reach;
+    const c = geo.P(x, y);
+    ctx.strokeStyle = col; ctx.globalAlpha = 0.3; ctx.setLineDash([3, 4]); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(c[0], c[1], r * s, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+  if (ph === 7) {                         // 倒地
+    const c = pt(-0.3, 0);
+    ctx.save(); ctx.translate(c[0], c[1]); ctx.rotate(-th);
+    ctx.fillStyle = col; ctx.globalAlpha = 0.55; ctx.beginPath(); ctx.ellipse(0, 0, 0.55 * s, 0.2 * s, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1; ctx.restore();
+    ctx.fillStyle = ink; ctx.font = `700 ${Math.max(14, 0.3 * s)}px system-ui`; ctx.textAlign = 'center';
+    ctx.fillText('读秒', c[0], c[1] - 0.45 * s);
+    return;
+  }
+  // 身体（肩膀横向的椭圆）
+  const c = geo.P(x, y);
+  ctx.save(); ctx.translate(c[0], c[1]); ctx.rotate(-th);
+  ctx.fillStyle = col; ctx.strokeStyle = ink; ctx.lineWidth = 1.5;
+  const crouch = post === 2 ? 0.85 : 1;
+  ctx.beginPath(); ctx.ellipse(0, 0, 0.16 * s * crouch, 0.27 * s * crouch, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.restore();
+  // 头
+  let hf = 0.03, hl = 0, hr = 0.11, hcol = col;
+  if (ph === 5 && mv === 14) hl = 0.14 * st;         // 侧闪
+  if (ph === 5 && mv === 15) { hr = 0.075; hcol = ink; }   // 下潜
+  if (ph === 5 && mv === 16) hf = -0.14;             // 后仰
+  if (ph === 3) hf = -0.07;
+  if (post === 2) hr *= 0.85;
+  const flash = ph === 3 && rep.frames[t].f[1 - k][F.oc] === 1;
+  const hp = pt(hf, hl);
+  ctx.fillStyle = flash ? '#ffffff' : hcol; ctx.beginPath(); ctx.arc(hp[0], hp[1], hr * s, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = fr[F.tilt] ? css('--crit') : ink; ctx.lineWidth = fr[F.tilt] ? 3 : 1.5; ctx.stroke();
+  // 拳套
+  let lead = [0.27, 0.11 * st], rear = [0.2, -0.11 * st];
+  if (post === 1) lead = [0.38, 0.08 * st];                                    // 长架：前手撑开
+  if (post === 2) { lead = [0.22, 0.08 * st]; rear = [0.18, -0.08 * st]; }     // 低姿：收紧
+  if (post === 3) { lead = [0.12, 0.2 * st]; rear = [0.05, -0.18 * st]; }      // 低手位：手放低
+  if (fr[F.g] === 1) { lead = [0.22, 0.07 * st]; rear = [0.2, -0.07 * st]; }
+  if (fr[F.g] === 2) { lead = [0.12, 0.17 * st]; rear = [0.1, -0.17 * st]; }
+  if (ph === 5 && mv === 13) lead = [0.3, 0.22 * st];       // 拍挡
+  if (ph === 6) { lead = [0.5, 0.26]; rear = [0.5, -0.26]; } // 缠抱
+  const since = rep.since[t][k], fm = rep.fmove[t][k];
+  const ext = (ph === 2 && fm < 12) ? (since <= 1 ? 1 : Math.max(0, 1 - (since - 1) / 4)) : 0;
+  let punching = -1, big = false, bodyShot = false;
+  if (ext > 0) punching = fm;
+  if (ph === 1 && mv < 12) { punching = -2; }
+  const target = p => {
+    const R = BR + SH + D.sim.RNG[p] * body.reach - 0.14, typ = D.sim.TYPE[p], hand = D.sim.HAND[p];
+    const side = (hand === 0 ? 1 : -1) * st;
+    if (typ === 0) return (e, rest) => [rest[0] + (R - rest[0]) * e, rest[1] * (1 - e)];
+    if (typ === 1) return (e) => [R * Math.sin(e * Math.PI / 2), side * 0.36 * Math.cos(e * Math.PI / 2)];
+    return (e, rest) => [rest[0] + (R - rest[0]) * e, rest[1] * (1 - e) * 0.5];
+  };
+  if (punching >= 0) {
+    const pth = target(punching), hand = D.sim.HAND[punching];
+    big = D.sim.TYPE[punching] === 2; bodyShot = D.sim.TGT[punching] === 1;
+    if (hand === 0) lead = pth(ext, lead); else rear = pth(ext, rear);
+  }
+  if (punching === -2) {             // 起手：拳往回收一点蓄力
+    const hand = D.sim.HAND[mv];
+    if (hand === 0) lead = [lead[0] - 0.05, lead[1]]; else rear = [rear[0] - 0.08, rear[1] - 0.04 * st];
+  }
+  const glove = (p, active) => {
+    const q = pt(p[0], p[1]);
+    const sh = pt(0.02, p[1] > 0 ? 0.2 : -0.2);
+    ctx.strokeStyle = ink; ctx.lineWidth = 0.05 * s;
+    ctx.beginPath(); ctx.moveTo(sh[0], sh[1]); ctx.lineTo(q[0], q[1]); ctx.stroke();
+    const r = (active && big ? 0.1 : 0.078) * s;
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(q[0], q[1], r, 0, Math.PI * 2); ctx.fill();
+    ctx.lineWidth = 1.5; if (active && bodyShot) ctx.setLineDash([2, 2]); ctx.stroke(); ctx.setLineDash([]);
+  };
+  const leadActive = punching >= 0 && D.sim.HAND[punching] === 0, rearActive = punching >= 0 && D.sim.HAND[punching] === 1;
+  glove(rear, rearActive); glove(lead, leadActive);
+  // 名字和动作
+  const tag = rep.ids[k] === 'S' ? '陪练' : rep.ids[k];
+  const what = ph ? PH[ph] + (ph <= 2 && mv < 12 ? '·' + PUNCH[mv] : '') : ACT[fr[F.act]];
+  ctx.textAlign = 'center';
+  ctx.font = `700 ${Math.max(12, 0.17 * s)}px system-ui`; ctx.fillStyle = ink;
+  ctx.fillText(tag, c[0], c[1] - 0.42 * s);
+  ctx.font = `${Math.max(10, 0.12 * s)}px system-ui`; ctx.fillStyle = css('--ink-2');
+  ctx.fillText(what, c[0], c[1] + 0.55 * s);
+}
+
+function drawEffects(t, geo) {
+  const rep = P.rep, s = geo.s;
+  for (let back = 0; back < 14; back++) {
+    const tt = t - back; if (tt < 1) break;
+    for (let k = 0; k < 2; k++) {
+      const f = rep.frames[tt].f[k], tg = rep.frames[tt].f[1 - k];
+      const c = geo.P(tg[F.x], tg[F.y]);
+      ctx.globalAlpha = 1 - back / 14; ctx.textAlign = 'center';
+      if (f[F.fired] && f[F.oc] === 1) {
+        if (back < 3) {
+          ctx.strokeStyle = f[F.ctr] ? '#d03b3b' : '#fab219'; ctx.lineWidth = 2;
+          for (let i = 0; i < 10; i++) {
+            const an = i * Math.PI / 5, r1 = 0.1 * s, r2 = (f[F.dmg] >= 8 ? 0.3 : 0.2) * s;
+            ctx.beginPath(); ctx.moveTo(c[0] + Math.cos(an) * r1, c[1] + Math.sin(an) * r1); ctx.lineTo(c[0] + Math.cos(an) * r2, c[1] + Math.sin(an) * r2); ctx.stroke();
+          }
+        }
+        ctx.fillStyle = css('--ink'); ctx.font = `700 ${Math.max(12, 0.16 * s)}px system-ui`;
+        ctx.fillText((f[F.ctr] ? '反击 ' : '') + PUNCH[f[F.fired] - 1] + ' −' + f[F.dmg], c[0], c[1] - (0.62 + back * 0.02) * s);
+      } else if (f[F.fired] && f[F.oc] === 2) {
+        ctx.fillStyle = css('--muted'); ctx.font = `600 ${Math.max(11, 0.13 * s)}px system-ui`;
+        ctx.fillText('挡住', c[0], c[1] - (0.62 + back * 0.02) * s);
+      }
+      if (tg[F.ev] >= 13) {
+        ctx.fillStyle = css('--good-text'); ctx.font = `600 ${Math.max(11, 0.14 * s)}px system-ui`;
+        ctx.fillText(DEFNAME[tg[F.ev]], c[0], c[1] - (0.62 + back * 0.02) * s);
+      }
+      if (f[F.kd]) {
+        const me = geo.P(f[F.x], f[F.y]);
+        ctx.fillStyle = '#d03b3b'; ctx.font = `800 ${Math.max(18, 0.32 * s)}px system-ui`;
+        ctx.fillText('击倒！', me[0], me[1] - (0.8 + back * 0.02) * s);
+      }
+      if (f[F.fk]) {
+        const me = geo.P(f[F.x], f[F.y]);
+        ctx.fillStyle = css('--ink-2'); ctx.font = `600 ${Math.max(11, 0.13 * s)}px system-ui`;
+        ctx.fillText('被晃了', me[0], me[1] - (0.62 + back * 0.02) * s);
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+function meter(label, v, color) {
+  return `<div class="meter"><span class="t">${label}</span><div class="bar"><div style="width:${Math.max(0, Math.min(100, v)).toFixed(1)}%;background:${color}"></div></div></div>`;
+}
+function meterR(label, v, color) {
+  return `<div class="meter"><div class="bar"><div style="width:${Math.max(0, Math.min(100, v)).toFixed(1)}%;background:${color}"></div></div><span class="t">${label}</span></div>`;
+}
+
+function render() {
+  const rep = P.rep; if (!rep) return;
+  const w = size();
+  const t = Math.min(Math.floor(P.t), rep.frames.length - 1), a = P.t - Math.floor(P.t);
+  const m = 0.45, s = w / (RING + 2 * m);
+  const geo = { s, P: (x, y) => [(x + m) * s, (RING - y + m) * s] };
+  ctx.clearRect(0, 0, w, w);
+  // 擂台：围绳和四个角
+  const [x0, y0] = geo.P(0, RING), [x1, y1] = geo.P(RING, 0);
+  ctx.strokeStyle = css('--rope'); ctx.lineWidth = 2;
+  for (const d of [0, 0.08, 0.16]) ctx.strokeRect(x0 - d * s, y0 - d * s, (x1 - x0) + 2 * d * s, (y1 - y0) + 2 * d * s);
+  const corner = (x, y, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, 0.13 * s, 0, Math.PI * 2); ctx.fill(); };
+  corner(x0, y1, css('--red')); corner(x1, y0, css('--blue')); corner(x0, y0, '#ffffff'); corner(x1, y1, '#ffffff');
+  ctx.strokeStyle = css('--grid'); ctx.lineWidth = 1; ctx.beginPath(); ctx.arc((x0 + x1) / 2, (y0 + y1) / 2, 0.5 * s, 0, Math.PI * 2); ctx.stroke();
+  drawFighter(0, t, a, geo); drawFighter(1, t, a, geo); drawEffects(t, geo);
+  // HUD
+  const fr = rep.frames[t];
+  const hud = (k, R) => {
+    const f = fr.f[k], who = rep.ids[k], M = R ? meterR : meter, col = `var(${COLOR[who]})`;
+    const sub = `<div style="color:var(--ink-2);font-size:11.5px">${esc(D.postures[f[F.post]])} · ${f[F.st] < 0 ? '反架' : '正架'}${who !== 'S' ? ' · ' + esc(D.plans.names[f[F.plan]]) : ''}${f[F.tilt] ? '<span class="tag hot">上头</span>' : ''}</div>`;
+    return `<b>${esc(NAME[who])}</b>${sub}` + M('体力', f[F.hp], col) + M('体能', f[F.stam] * 100, 'var(--muted)') +
+      M('心态', f[F.comp], 'var(--seq)') + M('晕眩', f[F.stun], 'var(--crit)');
+  };
+  document.getElementById('hudL').innerHTML = hud(0, false);
+  document.getElementById('hudR').innerHTML = hud(1, true);
+  const secs = fr.t * DT, end = t >= rep.frames.length - 1, res = rep.result;
+  const wname = res.winner < 0 ? '平局' : `${NAME[rep.ids[res.winner]]} ${D.sim.methods[res.method]}获胜`;
+  document.getElementById('clock').innerHTML = `第 ${fr.r + 1} 回合<br>${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, '0')}<small>${end ? esc(wname) : '帧 ' + t}</small>`;
+  document.getElementById('scrub').value = t;
+  const ev = rep.events.filter(e => e.t <= t).slice(-40).reverse();
+  document.getElementById('ticker').innerHTML = ev.length ? ev.map(e => `<div><span class="tm">${e.clock}</span>${e.text}</div>`).join('') : '<div>开打</div>';
+}
+
+function tick(ts) {
+  if (!P.playing) return;
+  if (P.last) P.t += (ts - P.last) / 1000 / DT * P.speed;
+  P.last = ts;
+  if (P.t >= P.rep.frames.length - 1) { P.t = P.rep.frames.length - 1; setPlaying(false); }
+  render();
+  if (P.playing) requestAnimationFrame(tick);
+}
+function setPlaying(on) {
+  P.playing = on; P.last = 0;
+  document.getElementById('play').textContent = on ? '❚❚ 暂停' : '▶ 播放';
+  if (on) { if (P.t >= P.rep.frames.length - 1) P.t = 0; requestAnimationFrame(tick); }
+}
+function load(i) {
+  setPlaying(false);
+  P.rep = prep(D.replays[i]); P.t = 0;
+  document.getElementById('scrub').max = P.rep.frames.length - 1;
+  document.querySelectorAll('#tabs button').forEach((b, j) => b.setAttribute('aria-pressed', i === j));
+  const r = P.rep.result, j = r.judges;
+  document.getElementById('scorecards').textContent = r.method >= 3 ?
+    `记分卡：${j.map((c, n) => `裁判${n + 1} ${c[0]}-${c[1]}`).join('，')}` : `${D.sim.methods[r.method]}，第 ${P.rep.frames[P.rep.frames.length - 1].r + 1} 回合 ${(P.rep.frames[P.rep.frames.length - 1].t * DT).toFixed(1)} 秒`;
+  render();
+}
+document.getElementById('tabs').innerHTML = D.replays.map((r, i) => `<button aria-pressed="false" data-i="${i}">${esc(r.title)}</button>`).join('');
+document.getElementById('tabs').onclick = e => { const b = e.target.closest('button'); if (b) load(+b.dataset.i); };
+document.getElementById('play').onclick = () => setPlaying(!P.playing);
+document.getElementById('prev').onclick = () => { setPlaying(false); P.t = Math.max(0, Math.floor(P.t) - 1); render(); };
+document.getElementById('next').onclick = () => { setPlaying(false); P.t = Math.min(P.rep.frames.length - 1, Math.floor(P.t) + 1); render(); };
+document.getElementById('jump').onclick = () => {
+  const e = P.rep.events.find(e => e.t > Math.floor(P.t) + 1);
+  if (e) { setPlaying(false); P.t = Math.max(0, e.t - 6); render(); }
+};
+document.getElementById('scrub').oninput = e => { setPlaying(false); P.t = +e.target.value; render(); };
+document.getElementById('speed').onchange = e => { P.speed = +e.target.value; };
+document.getElementById('showRange').onchange = render;
+window.addEventListener('resize', render);
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
+load(0);
+
+document.getElementById('records').innerHTML =
+  `<li>${esc(D.run.name)} v${String(D.run.version).padStart(4, '0')}：A <code>${D.run.sha.A.slice(0, 16)}…</code> B <code>${D.run.sha.B.slice(0, 16)}…</code></li>` +
+  D.replays.map(r => `<li>回放档 <code>runs/${esc(r.file)}</code></li>`).join('');
+</script>
+</body>
+</html>

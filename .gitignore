@@ -1,0 +1,5 @@
+# 训练产出、存档、报告（体积大，按需单独发布）
+runs/
+__pycache__/
+*.pyc
+.playwright-mcp/
