@@ -119,7 +119,7 @@ def main():
     }
     with open(os.path.join(out_dir, "season.json"), "w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o))
-    tpl = open("season_template.html", encoding="utf-8").read()
+    tpl = open("season_template.html", encoding="utf-8").read().replace("/*__VIZ__*/", open("viz.js", encoding="utf-8").read())
     html = tpl.replace("/*__DATA__*/null", json.dumps(data, ensure_ascii=False, separators=(",", ":"),
                                                       default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o)))
     out_html = os.path.join("runs", f"season_{args.name}.html")

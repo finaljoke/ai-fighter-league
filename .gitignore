@@ -3,3 +3,6 @@ runs/
 __pycache__/
 *.pyc
 .playwright-mcp/
+tools/node_modules/
+*.mp4
+tools/voice_cache/

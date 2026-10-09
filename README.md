@@ -34,6 +34,29 @@ py -X utf8 analyze_boxing.py --run b1               # 报告：技术使用表�
 熟练度（随训练演化）、习惯、当天状态、战术计划（角落赛前模拟选、回合间调整）、架势（4 种，可换）、站架（正反架，可换），
 都会影响这个角色在这一局的发挥。角色定义在 `bodies.py`，流派在 `schools.py`。
 
+## 赛季、训练营与观看页
+
+```powershell
+py -X utf8 test_career.py                                   # 训练营和赛事流程的验收测试
+py -X utf8 season.py --run b1 --name s0                     # 接手训练好的角色，跑第 0 季：开季一战 + 两个 35 天训练营
+py -X utf8 render_season.py --name s0                       # 改了画面代码后，只重新生成观看页（不重跑比赛）
+node tools/export_video.mjs runs/season_s0.html runs/第1战.mp4 --items 0                 # 导出一场比赛
+node tools/export_video.mjs runs/season_s0.html runs/训练营.mp4 --items 1-35 --day-len 3  # 导出训练营（每天 3 秒）
+```
+
+导出视频要先在 `tools/` 下 `npm install`（只装 puppeteer-core，用本机的 Edge），本机要有 ffmpeg，Python 要装 numpy 和 edge-tts。
+
+视频默认带声音：击打、格挡、挥空、回合铃、观众（跟着攻防起落）、训练场的器械和节拍，全部程序合成；中文解说用 edge-tts 生成，缓存在 `tools/voice_cache/`，连不上网就只出音效。`--mute 1` 出无声版，`--keep 1` 保留声音事件表和音轨方便调音。
+
+| 文件 | 干什么 |
+|---|---|
+| `career.py` | 角色在两场比赛之间的生活：训练项目、疲劳伤病、睡眠饮食、称重、比赛夜、体检 |
+| `season.py` / `render_season.py` | 跑一个赛季并存档 / 用存档重新生成观看页 |
+| `viz.js` | 转播画面渲染：拳手骨骼与造型、动作、跟拍镜头、擂台、开场卡、回合统计、读秒、慢镜回放、判定、训练场景。观看页和导出视频共用 |
+| `season_template.html` | 赛季观看页（时间线、比赛、训练场、疲劳曲线） |
+| `tools/export_video.mjs` | 把观看页的画面逐帧导出成 mp4，再配上音轨 |
+| `tools/make_audio.py` | 按声音事件表合成音轨（音效、观众、训练节拍、解说），事件表由 `viz.js` 从同一条时间线算出 |
+
 ## 一维原型
 
 ## 跑起来

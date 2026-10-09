@@ -109,18 +109,16 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
   <div class="card" id="growth"></div>
 </main>
 
+<script>/*__VIZ__*/</script>
 <script id="data" type="application/json">/*__DATA__*/null</script>
 <script>
 const D = JSON.parse(document.getElementById('data').textContent);
+VIZ.setSim(D.sim);
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const IDS = ['A', 'B'];
 const COLOR = { A: '#3a86e8', B: '#ef6a33', S: '#9a9890' };
-const TRUNK = { A: '#1e4f9c', B: '#a8401a', S: '#555' };
 const NAME = { A: D.cards.A.label, B: D.cards.B.label };
-const PUNCH = D.sim.actions.slice(7, 19);
-const DEFNAME = { 13: '拍开', 14: '侧闪躲过', 15: '下潜躲过', 16: '后仰躲过' };
-const F = { x: 0, y: 1, th: 2, hp: 3, stun: 4, stam: 5, comp: 6, ph: 7, mv: 8, g: 9, fired: 10, oc: 11, dmg: 12, act: 13, kd: 14, ev: 15, ctr: 16, fk: 17, post: 18, st: 19, tilt: 20, plan: 21 };
 const ACT_COLOR = { '休息': '#8c8a84', '跑步': '#1baf7a', '跳绳': '#1baf7a', '循环训练': '#0f8a5f', '器械力量': '#7a4fd0', '速度训练': '#2a78d6',
   '反应球': '#2a78d6', '绳梯': '#4a9fe0', '招式训练': '#eda100', '打沙袋': '#d98a00', '打手靶': '#c77700', '看录像': '#e87ba4',
   '实战复盘': '#d0628d', '对练·教练': '#e34948', '对练·邀请拳手': '#b8282a', '战术会议': '#52514e' };
@@ -167,358 +165,44 @@ tl.innerHTML = DAYS.map((d, i) => {
 document.getElementById('legend').innerHTML = '上行 A，下行 B · ' + Object.entries(ACT_COLOR).map(([k, c]) => `<span><i style="background:${c}"></i>${esc(k)}</span>`).join('');
 tl.onclick = e => { const c = e.target.closest('.col'); if (c) select(+c.dataset.i); };
 
-// ---------------------------------------------------------------- 画布与相机
+// ---------------------------------------------------------------- 画布（渲染全部交给 viz.js）
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
 let W = 0, H = 0;
 function size() {
   const w = cv.clientWidth, h = Math.round(w * 9 / 16), dpr = window.devicePixelRatio || 1;
-  cv.width = w * dpr; cv.height = h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); W = w; H = h;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); W = w; H = h;
 }
-// 侧面转播相机：俯视坐标 (x, y) → 屏幕。y 越大越远。
-function camera(x0, y0, w, h, ring) {
-  const base = w / (ring * 1.25), floorNear = y0 + h * 0.88, depth = h * 0.33;
-  return {
-    s: t => base * (1 - 0.28 * t),
-    P: (x, y, z = 0) => { const t = y / ring, sc = base * (1 - 0.28 * t); return [x0 + w / 2 + (x - ring / 2) * sc, floorNear - t * depth - z * sc, sc]; },
-    ring, base,
-  };
-}
-
-// ---------------------------------------------------------------- 小人
-function bodyShape(b) {
-  const reach = b ? b.reach : 0.75, mass = b ? b.mass : 72;
-  return { h: 1.72 + (reach - 0.75) * 0.7, arm: 0.55 + (reach - 0.75) * 0.9, w: 0.17 + (mass - 70) * 0.004 };
-}
-// pose: {lean, crouch, headOff:[dx,dy], lead:[dx,dy], rear:[dx,dy], down, tint, bigRear, bodyShot}
-function drawFigure(c, x, yFloor, sc, dir, id, b, pose) {
-  const S = bodyShape(b), col = COLOR[id] || '#999', ink = '#0d0f14';
-  const X = m => x + dir * m * sc, Y = m => yFloor - m * sc;
-  c.lineCap = 'round'; c.lineJoin = 'round';
-  if (pose.down) {
-    c.fillStyle = col; c.globalAlpha = 0.9;
-    c.beginPath(); c.ellipse(x, yFloor - 0.12 * sc, 0.85 * sc, 0.16 * sc, 0, 0, Math.PI * 2); c.fill();
-    c.beginPath(); c.arc(x + dir * 0.8 * sc, yFloor - 0.15 * sc, 0.12 * sc, 0, Math.PI * 2); c.fill(); c.globalAlpha = 1;
-    return;
-  }
-  const crouch = pose.crouch || 0, lean = pose.lean || 0;
-  const hipH = 0.95 * (S.h / 1.75) - crouch * 0.25, shH = hipH + 0.5 - crouch * 0.12;
-  const hip = [X(lean * 0.2), Y(hipH)], sh = [X(lean + 0.02), Y(shH)];
-  // 腿
-  c.strokeStyle = ink; c.lineWidth = 0.075 * sc;
-  c.beginPath(); c.moveTo(hip[0], hip[1]); c.lineTo(X(0.2 + crouch * 0.05), Y(0.45 - crouch * 0.1)); c.lineTo(X(0.22), Y(0.02));
-  c.moveTo(hip[0], hip[1]); c.lineTo(X(-0.12), Y(0.45 - crouch * 0.1)); c.lineTo(X(-0.22), Y(0.02)); c.stroke();
-  // 短裤
-  c.fillStyle = TRUNK[id] || '#444';
-  c.beginPath(); c.ellipse(hip[0], hip[1] + 0.02 * sc, S.w * 1.15 * sc, 0.12 * sc, 0, 0, Math.PI * 2); c.fill();
-  // 躯干
-  c.strokeStyle = col; c.lineWidth = S.w * 2 * sc;
-  c.beginPath(); c.moveTo(hip[0], hip[1] - 0.08 * sc); c.lineTo(sh[0], sh[1] + 0.05 * sc); c.stroke();
-  // 头
-  const ho = pose.headOff || [0, 0];
-  const head = [X(lean * 1.2 + 0.04 + ho[0]), Y(shH + 0.2 + ho[1])];
-  c.fillStyle = pose.flash ? '#ffffff' : (pose.tint || '#f1c9a5');
-  c.beginPath(); c.arc(head[0], head[1], 0.115 * sc, 0, Math.PI * 2); c.fill();
-  c.strokeStyle = pose.tilt ? '#d03b3b' : ink; c.lineWidth = pose.tilt ? 3 : 1.5; c.stroke();
-  // 手：先后手再前手
-  const arm = (g, big, dashed) => {
-    const sx = sh[0], sy = sh[1] + 0.02 * sc, gx = X(g[0] + lean * 0.6), gy = Y(shH + g[1]);
-    const ex = (sx + gx) / 2 - dir * 0.02 * sc, ey = Math.max(sy, gy) + 0.1 * sc;
-    c.strokeStyle = ink; c.lineWidth = 0.06 * sc;
-    c.beginPath(); c.moveTo(sx, sy); c.quadraticCurveTo(ex, ey, gx, gy); c.stroke();
-    c.fillStyle = col; c.beginPath(); c.arc(gx, gy, (big ? 0.1 : 0.085) * sc, 0, Math.PI * 2); c.fill();
-    c.strokeStyle = ink; c.lineWidth = 1.5; if (dashed) c.setLineDash([3, 2]); c.stroke(); c.setLineDash([]);
-  };
-  arm(pose.rear, pose.bigRear, pose.bodyShot && pose.rearActive);
-  arm(pose.lead, pose.bigLead, pose.bodyShot && pose.leadActive);
-  if (pose.label) {
-    c.fillStyle = 'rgba(255,255,255,0.85)'; c.font = `600 ${Math.max(11, 0.16 * sc)}px system-ui`; c.textAlign = 'center';
-    c.fillText(pose.label, head[0], head[1] - 0.22 * sc);
-  }
-}
-
-// 从一帧比赛数据算姿势
-function poseFromFrame(rep, t, k, dist) {
-  const fr = rep.frames[t].f[k], ph = fr[F.ph], mv = fr[F.mv], post = fr[F.post];
-  const b = rep.bodies[k], S = bodyShape(b);
-  const since = rep.since[t][k], fm = rep.fmove[t][k];
-  let lead = [0.28, 0.05], rear = [0.18, 0.0], crouch = 0, lean = 0, headOff = [0, 0];
-  if (post === 1) lead = [0.42, 0.0];
-  if (post === 2) { crouch = 0.5; lead = [0.22, 0.12]; rear = [0.16, 0.1]; }
-  if (post === 3) { lead = [0.2, -0.35]; rear = [0.08, -0.38]; }
-  if (fr[F.g] === 1) { lead = [0.2, 0.15]; rear = [0.17, 0.12]; }
-  if (fr[F.g] === 2) { lead = [0.16, -0.12]; rear = [0.12, -0.15]; }
-  if (ph === 5 && mv === 14) headOff = [-0.05, -0.08];
-  if (ph === 5 && mv === 15) { crouch = 1.0; lean = 0.08; }
-  if (ph === 5 && mv === 16) lean = -0.14;
-  if (ph === 5 && mv === 13) lead = [0.38, 0.1];
-  if (ph === 3) lean = -0.1;
-  if (ph === 4) lean = -0.04;
-  if (ph === 6) { lead = [0.45, 0.0]; rear = [0.42, -0.05]; lean = 0.1; }
-  const pose = { lead, rear, crouch, lean, headOff, tilt: fr[F.tilt], down: ph === 7 };
-  // 出拳：直拳伸到对手、勾拳从侧面绕、上勾拳从下往上
-  const ext = (ph === 2 && fm < 12) ? (since <= 1 ? 1 : Math.max(0, 1 - (since - 1) / 4)) : 0;
-  if (ext > 0) {
-    const typ = D.sim.TYPE[fm], tgt = D.sim.TGT[fm], hand = D.sim.HAND[fm];
-    const reach = Math.min(S.arm + 0.12, Math.max(0.3, dist - 0.18));
-    const yT = tgt === 0 ? 0.2 : -0.18;
-    let g;
-    if (typ === 0) g = [0.25 + (reach - 0.25) * ext, 0.05 + (yT - 0.05) * ext];
-    else if (typ === 1) g = [0.15 + (reach * 0.8 - 0.15) * ext, yT + 0.12 * Math.sin(ext * Math.PI)];
-    else g = [0.15 + (reach * 0.65 - 0.15) * ext, -0.25 + (yT + 0.25) * ext];
-    if (hand === 0) { pose.lead = g; pose.leadActive = true; pose.bigLead = typ === 2; }
-    else { pose.rear = g; pose.rearActive = true; pose.bigRear = typ >= 1; }
-    pose.bodyShot = tgt === 1;
-  }
-  if (ph === 1 && mv < 12) { const hand = D.sim.HAND[mv]; if (hand === 0) pose.lead = [pose.lead[0] - 0.06, pose.lead[1]]; else pose.rear = [pose.rear[0] - 0.1, pose.rear[1]]; }
-  pose.flash = ph === 3 && rep.frames[t].f[1 - k][F.oc] === 1;
-  return pose;
-}
-
-function prepRep(rep) {
-  if (rep.since) return rep;
-  const n = rep.frames.length, since = [], fmove = [];
-  const last = [-99, -99], lm = [0, 0];
-  for (let t = 0; t < n; t++) {
-    const a = [0, 0], b2 = [0, 0];
-    for (let k = 0; k < 2; k++) { const f = rep.frames[t].f[k]; if (f[F.fired] > 0) { last[k] = t; lm[k] = f[F.fired] - 1; } a[k] = t - last[k]; b2[k] = lm[k]; }
-    since.push(a); fmove.push(b2);
-  }
-  rep.since = since; rep.fmove = fmove;
-  rep.events = [];
-  for (let t = 1; t < n; t++) for (let k = 0; k < 2; k++) {
-    const f = rep.frames[t].f[k];
-    if (f[F.kd]) rep.events.push({ t, k, text: '击倒！', big: 3 });
-    else if (f[F.fired] && f[F.oc] === 1 && f[F.ctr]) rep.events.push({ t, k, text: '反击！' + PUNCH[f[F.fired] - 1], big: 2 });
-    else if (f[F.fired] && f[F.oc] === 1 && f[F.dmg] >= 5) rep.events.push({ t, k, text: PUNCH[f[F.fired] - 1], big: 1 });
-    if (f[F.ev] >= 13) rep.events.push({ t, k, text: DEFNAME[f[F.ev]], big: 1, def: true });
-    if (f[F.fk]) rep.events.push({ t, k, text: '被晃了', big: 1, def: true });
-  }
-  return rep;
-}
-
-// ---------------------------------------------------------------- 擂台
-function drawArena(c, cam, opts = {}) {
-  const R = cam.ring;
-  const [ax, ay] = cam.P(0, 0), [bx, by] = cam.P(R, 0), [cx2, cy2] = cam.P(R, R), [dx, dy] = cam.P(0, R);
-  // 观众席
-  if (!opts.gym) {
-    const g = c.createLinearGradient(0, 0, 0, dy);
-    g.addColorStop(0, '#0e1118'); g.addColorStop(1, '#1d2430'); c.fillStyle = g; c.fillRect(0, 0, W, dy + 4);
-    c.fillStyle = 'rgba(255,255,255,0.05)';
-    for (let row = 0; row < 4; row++) for (let i = 0; i < 26; i++) {
-      const x = (i + (row % 2) * 0.5) * W / 25, y = dy - 14 - row * 26;
-      c.beginPath(); c.arc(x, y - 10, 7, 0, Math.PI * 2); c.fill();
-      c.beginPath(); c.ellipse(x, y + 4, 12, 8, 0, Math.PI, 0); c.fill();
-    }
-  }
-  // 台面
-  c.fillStyle = opts.gym ? '#6b5a48' : '#c9c3b2';
-  c.beginPath(); c.moveTo(ax, ay); c.lineTo(bx, by); c.lineTo(cx2, cy2); c.lineTo(dx, dy); c.closePath(); c.fill();
-  c.fillStyle = opts.gym ? '#4c3f33' : '#8a2f2a'; c.fillRect(ax - 6, ay, bx - ax + 12, 14);
-  // 远端围绳和角柱
-  ropes(c, cam, R, 'far');
-  return () => ropes(c, cam, R, 'near');
-}
-function ropes(c, cam, R, which) {
-  const posts = which === 'far' ? [[0, R], [R, R]] : [[0, 0], [R, 0]];
-  const cols = which === 'far' ? ['#ffffff', '#2a78d6'] : ['#d03b3b', '#ffffff'];
-  posts.forEach(([x, y], i) => {
-    const [px, py, sc] = cam.P(x, y);
-    c.strokeStyle = cols[i]; c.lineWidth = Math.max(3, 0.08 * sc);
-    c.beginPath(); c.moveTo(px, py); c.lineTo(px, py - 1.3 * sc); c.stroke();
-  });
-  c.strokeStyle = which === 'far' ? 'rgba(230,230,230,0.85)' : 'rgba(240,240,240,0.55)'; c.lineWidth = 2;
-  for (const z of [0.55, 0.9, 1.25]) {
-    const p0 = cam.P(posts[0][0], posts[0][1], z), p1 = cam.P(posts[1][0], posts[1][1], z);
-    c.beginPath(); c.moveTo(p0[0], p0[1]); c.lineTo(p1[0], p1[1]); c.stroke();
-  }
-  if (which === 'far') {
-    for (const side of [0, R]) for (const z of [0.55, 0.9, 1.25]) {
-      const p0 = cam.P(side, 0, z), p1 = cam.P(side, R, z);
-      c.strokeStyle = 'rgba(230,230,230,0.5)'; c.beginPath(); c.moveTo(p0[0], p0[1]); c.lineTo(p1[0], p1[1]); c.stroke();
-    }
-  }
-}
-
-function drawBout(c, rep, tf, box, opts = {}) {
-  prepRep(rep);
-  const t = Math.min(Math.floor(tf), rep.frames.length - 1), a = tf - Math.floor(tf);
-  const [x0, y0, w, h] = box;
-  const cam = camera(x0, y0, w, h, D.sim.RING);
-  const near = drawArena(c, cam, opts);
-  const fr = rep.frames[t], nx = rep.frames[Math.min(t + 1, rep.frames.length - 1)];
-  const pos = [0, 1].map(k => [fr.f[k][F.x] + (nx.f[k][F.x] - fr.f[k][F.x]) * a, fr.f[k][F.y] + (nx.f[k][F.y] - fr.f[k][F.y]) * a]);
-  const dist = Math.hypot(pos[0][0] - pos[1][0], pos[0][1] - pos[1][1]);
-  const order = [0, 1].sort((i, j) => pos[j][1] - pos[i][1]);
-  const ids = opts.ids || [rep.bodies[0].id, rep.bodies[1].id];
-  for (const k of order) {
-    const [sx, sy, sc] = cam.P(pos[k][0], pos[k][1]);
-    const [ox] = cam.P(pos[1 - k][0], pos[1 - k][1]);
-    const dir = Math.abs(ox - sx) > 4 ? Math.sign(ox - sx) : (Math.cos(fr.f[k][F.th]) >= 0 ? 1 : -1);
-    c.fillStyle = 'rgba(0,0,0,0.25)'; c.beginPath(); c.ellipse(sx, sy, 0.35 * sc, 0.08 * sc, 0, 0, Math.PI * 2); c.fill();
-    const pose = poseFromFrame(rep, t, k, dist);
-    pose.label = opts.labels ? opts.labels[k] : ids[k];
-    drawFigure(c, sx, sy, sc, dir, ids[k], rep.bodies[k], pose);
-  }
-  near();
-  // 命中特效
-  for (let back = 0; back < 12; back++) {
-    const tt = t - back; if (tt < 1) break;
-    for (let k = 0; k < 2; k++) {
-      const f = rep.frames[tt].f[k]; if (!(f[F.fired] && f[F.oc] === 1)) continue;
-      const tg = rep.frames[tt].f[1 - k], [px, py, sc] = cam.P(tg[F.x], tg[F.y], D.sim.TGT[f[F.fired] - 1] === 0 ? 1.62 : 1.15);
-      c.globalAlpha = 1 - back / 12;
-      if (back < 3) { c.strokeStyle = f[F.ctr] ? '#ff5a4f' : '#ffd24a'; c.lineWidth = 2.5;
-        for (let i = 0; i < 10; i++) { const an = i * Math.PI / 5; c.beginPath(); c.moveTo(px + Math.cos(an) * 0.08 * sc, py + Math.sin(an) * 0.08 * sc); c.lineTo(px + Math.cos(an) * 0.22 * sc, py + Math.sin(an) * 0.22 * sc); c.stroke(); } }
-      c.fillStyle = '#fff'; c.font = `700 ${Math.max(11, 0.15 * sc)}px system-ui`; c.textAlign = 'center';
-      c.fillText('−' + f[F.dmg], px, py - (0.3 + back * 0.02) * sc);
-      c.globalAlpha = 1;
-    }
-  }
-  return { t, cam };
-}
-
-// ---------------------------------------------------------------- 转播字幕和状态条
-function hud(c, rep, t, title) {
-  const fr = rep.frames[t];
-  const bar = (x, y, w, v, col, right) => { c.fillStyle = 'rgba(255,255,255,0.15)'; c.fillRect(x, y, w, 7); c.fillStyle = col; const ww = w * Math.max(0, Math.min(1, v)); c.fillRect(right ? x + w - ww : x, y, ww, 7); };
-  c.fillStyle = 'rgba(8,10,16,0.72)'; c.fillRect(0, 0, W, 62);
-  const ids = [rep.bodies[0].id, rep.bodies[1].id];
-  for (let k = 0; k < 2; k++) {
-    const f = fr.f[k], right = k === 1, x = right ? W * 0.58 : 16, w = W * 0.4 - 16;
-    c.fillStyle = '#fff'; c.font = '600 14px system-ui'; c.textAlign = right ? 'right' : 'left';
-    const nm = (NAME[ids[k]] || ids[k]) + `  ${D.sim.postures[f[F.post]]}${f[F.st] < 0 ? '·反架' : ''}${ids[k] in NAME ? ' · ' + D.sim.plans[f[F.plan]] : ''}${f[F.tilt] ? ' · 上头' : ''}`;
-    c.fillText(nm, right ? x + w : x, 18);
-    bar(x, 26, w, f[F.hp] / 100, COLOR[ids[k]] || '#aaa', right);
-    bar(x, 37, w, f[F.stam], '#bdbab0', right);
-    bar(x, 48, w, f[F.comp] / 100, '#7fb2ff', right);
-  }
-  const secs = fr.t * D.sim.DT;
-  c.fillStyle = '#fff'; c.font = '700 18px system-ui'; c.textAlign = 'center';
-  c.fillText(`R${fr.r + 1}  ${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, '0')}`, W / 2, 28);
-  c.font = '12px system-ui'; c.fillStyle = 'rgba(255,255,255,0.7)'; c.fillText(title || '', W / 2, 48);
-  // 大事件字幕
-  const ev = rep.events.filter(e => e.t <= t && t - e.t < 30 && e.big >= 2).slice(-1)[0];
-  if (ev) {
-    c.globalAlpha = 1 - (t - ev.t) / 30; c.font = `800 ${Math.round(W / 22)}px system-ui`; c.fillStyle = ev.big === 3 ? '#ff4d4d' : '#ffd24a';
-    c.fillText(`${ids[ev.k]} ${ev.text}`, W / 2, H * 0.32); c.globalAlpha = 1;
-  }
-}
-
-// ---------------------------------------------------------------- 训练场景
-const OPP_FIGHT = id => { // 对手最近一场比赛（看录像用）
-  const done = D.fights.filter(f => f.day <= (SEL_DAY || 0));
-  return done.length ? done[done.length - 1] : D.fights[0];
+const TRAIN_CTX = {
+  bodyOf: id => D.fights[0].bodies[IDS.indexOf(id)],
+  clips: D.clips, techNames: D.tech_names, names: NAME,
+  plansFor: (day, id) => { const f = D.fights.find(f => f.day >= day); const s = f ? f.fighters.indexOf(id) : -1; return f && s >= 0 ? f.plans[s].rank : []; },
+  lastFight: day => { const done = D.fights.filter(f => f.day <= day); return done.length ? done[done.length - 1] : D.fights[0]; },
 };
-let SEL_DAY = 0;
-function scene(c, id, entry, box, t) {
-  const [x0, y0, w, h] = box, act = entry.activity, note = entry.note || {};
-  const b = D.cards[id] ? { reach: D.fights[0].bodies[IDS.indexOf(id)].reach, mass: D.fights[0].bodies[IDS.indexOf(id)].mass } : null;
-  c.save(); c.beginPath(); c.rect(x0, y0, w, h); c.clip();
-  const g = c.createLinearGradient(0, y0, 0, y0 + h); g.addColorStop(0, '#2b2f38'); g.addColorStop(1, '#171a20'); c.fillStyle = g; c.fillRect(x0, y0, w, h);
-  const floor = y0 + h * 0.82, sc = h / 3.2, cx = x0 + w * 0.45;
-  c.fillStyle = '#3a3226'; c.fillRect(x0, floor, w, h - (floor - y0));
-  const ph = t * 2 * Math.PI;
-  const base = { lead: [0.28, 0.05], rear: [0.18, 0.0], crouch: 0, lean: 0 };
-  const punchCycle = (techs, speed = 1) => {
-    const list = (techs && techs.length ? techs : ['刺拳·头']).map(n => D.tech_names.indexOf(n)).filter(i => i >= 0 && i < 12);
-    const k = list[Math.floor(t * speed) % list.length], e = Math.max(0, Math.sin((t * speed % 1) * Math.PI));
-    const typ = D.sim.TYPE[k], hand = D.sim.HAND[k], tgt = D.sim.TGT[k], yT = tgt === 0 ? 0.2 : -0.15;
-    const g2 = typ === 0 ? [0.25 + 0.45 * e, 0.05 + (yT - 0.05) * e] : typ === 1 ? [0.15 + 0.35 * e, yT + 0.1 * Math.sin(e * Math.PI)] : [0.15 + 0.3 * e, -0.25 + (yT + 0.25) * e];
-    const p = { ...base };
-    if (hand === 0) p.lead = g2; else p.rear = g2;
-    p.bigRear = hand === 1 && typ >= 1; p.bodyShot = tgt === 1; p.leadActive = hand === 0; p.rearActive = hand === 1;
-    return { p, name: D.tech_names[k], e };
-  };
-  let pose = { ...base }, cap = act;
-  if (act === '休息') {
-    c.fillStyle = '#5a5f6b'; c.fillRect(cx - 1.0 * sc, floor - 0.45 * sc, 2.0 * sc, 0.12 * sc);
-    pose = { down: true }; drawFigure(c, cx, floor - 0.45 * sc, sc, 1, id, b, pose);
-    c.fillStyle = 'rgba(255,255,255,0.7)'; c.font = `700 ${0.3 * sc}px system-ui`; c.fillText('z', cx + 0.9 * sc, floor - (0.9 + 0.2 * Math.sin(ph)) * sc);
-    if (entry.after.injury > 0.01) { c.fillStyle = '#9fd3ff'; c.fillRect(cx + 0.55 * sc, floor - 0.7 * sc, 0.25 * sc, 0.15 * sc); }
-  } else if (act === '跑步') {
-    c.strokeStyle = '#d6cfae'; c.lineWidth = 4; c.setLineDash([24, 18]); c.lineDashOffset = -t * 120;
-    c.beginPath(); c.moveTo(x0, floor + 10); c.lineTo(x0 + w, floor + 10); c.stroke(); c.setLineDash([]);
-    const s = Math.sin(ph * 2);
-    pose = { lead: [0.15 + 0.15 * s, -0.1], rear: [0.1 - 0.15 * s, -0.1], lean: 0.12, crouch: 0.1 };
-    drawFigure(c, cx, floor - Math.abs(s) * 0.06 * sc, sc, 1, id, b, pose);
-  } else if (act === '跳绳') {
-    const jump = Math.abs(Math.sin(ph * 2)) * 0.15;
-    c.strokeStyle = '#ffd24a'; c.lineWidth = 2; c.beginPath();
-    const ry = Math.cos(ph * 2); c.ellipse(cx, floor - (0.9 + jump) * sc, 0.45 * sc, Math.abs(ry) * 0.9 * sc + 0.05 * sc, 0, 0, Math.PI * 2); c.stroke();
-    pose = { lead: [0.25, -0.35], rear: [-0.1, -0.35] };
-    drawFigure(c, cx, floor - jump * sc, sc, 1, id, b, pose);
-  } else if (act === '器械力量' || act === '循环训练') {
-    const up = (Math.sin(ph) + 1) / 2;
-    const squat = act === '循环训练' && Math.floor(t) % 2 === 0;
-    pose = { lead: [0.15, 0.1 + up * 0.55], rear: [0.05, 0.1 + up * 0.55], crouch: squat ? up : 0 };
-    drawFigure(c, cx, floor, sc, 1, id, b, pose);
-    const by = floor - (bodyShape(b).h * 0.83 + 0.1 + up * 0.55 - (squat ? up * 0.35 : 0)) * sc;
-    c.strokeStyle = '#cfd2d8'; c.lineWidth = 0.05 * sc; c.beginPath(); c.moveTo(cx - 0.6 * sc, by); c.lineTo(cx + 0.7 * sc, by); c.stroke();
-    c.fillStyle = '#30343c'; for (const dxx of [-0.6, 0.7]) { c.fillRect(cx + dxx * sc - 0.05 * sc, by - 0.2 * sc, 0.1 * sc, 0.4 * sc); }
-  } else if (act === '速度训练' || act === '招式训练') {
-    const pc = punchCycle(act === '招式训练' ? note.techs : ['刺拳·头', '后手直拳·头'], act === '速度训练' ? 3 : 1.2);
-    pose = pc.p; drawFigure(c, cx, floor, sc, 1, id, b, pose);
-    if (act === '招式训练') cap += ' · ' + pc.name;
-    // 镜子
-    c.fillStyle = 'rgba(180,200,230,0.12)'; c.fillRect(cx + 1.0 * sc, floor - 2.0 * sc, 0.12 * sc, 2.0 * sc);
-  } else if (act === '反应球') {
-    const bx = cx + (0.6 + 0.35 * Math.cos(ph * 1.5)) * sc, byy = floor - (1.2 + 0.4 * Math.abs(Math.sin(ph * 3))) * sc;
-    c.fillStyle = '#ff5a4f'; c.beginPath(); c.arc(bx, byy, 0.07 * sc, 0, Math.PI * 2); c.fill();
-    pose = { lead: [0.35 + 0.15 * Math.cos(ph * 1.5), 0.1], rear: [0.15, 0.0], lean: 0.05 };
-    drawFigure(c, cx, floor, sc, 1, id, b, pose);
-  } else if (act === '绳梯') {
-    c.strokeStyle = '#ffd24a'; c.lineWidth = 2;
-    for (let i = 0; i < 7; i++) { const lx = x0 + w * 0.1 + i * w * 0.12; c.strokeRect(lx, floor + 4, w * 0.11, 10); }
-    const px = x0 + w * 0.1 + ((t * 0.25) % 1) * w * 0.8;
-    pose = { lead: [0.25, 0.0], rear: [0.1, -0.05], crouch: 0.2 + 0.15 * Math.abs(Math.sin(ph * 4)) };
-    drawFigure(c, px, floor, sc, 1, id, b, pose);
-  } else if (act === '打沙袋' || act === '打手靶') {
-    const pc = punchCycle(note.techs, 1.4);
-    pose = pc.p; drawFigure(c, cx - 0.35 * sc, floor, sc, 1, id, b, pose);
-    if (act === '打沙袋') {
-      const sw = pc.e * 0.08;
-      c.fillStyle = '#7a2a22'; c.beginPath(); c.roundRect(cx + 0.45 * sc + sw * sc, floor - 1.8 * sc, 0.4 * sc, 1.1 * sc, 0.12 * sc); c.fill();
-      c.strokeStyle = '#999'; c.beginPath(); c.moveTo(cx + 0.65 * sc, y0); c.lineTo(cx + 0.65 * sc + sw * sc, floor - 1.8 * sc); c.stroke();
-    } else {
-      drawFigure(c, cx + 0.75 * sc, floor, sc, -1, 'S', null, { lead: [0.3, 0.2 * pc.e], rear: [0.25, -0.05], label: '教练' });
-    }
-    cap += ' · ' + pc.name;
-  } else if (act === '看录像' || act === '实战复盘') {
-    const tvx = x0 + w * 0.08, tvy = y0 + h * 0.12, tvw = w * 0.84, tvh = h * 0.5;
-    c.fillStyle = '#05070a'; c.fillRect(tvx - 6, tvy - 6, tvw + 12, tvh + 12);
-    const fg = OPP_FIGHT();
-    if (fg) { c.save(); c.beginPath(); c.rect(tvx, tvy, tvw, tvh); c.clip();
-      const n = fg.frames.length; drawBout(c, fg, (t * 20) % n, [tvx, tvy, tvw, tvh], { ids: [fg.bodies[0].id, fg.bodies[1].id] }); c.restore(); }
-    pose = { lead: [0.1, -0.2], rear: [0.05, -0.25] };
-    drawFigure(c, cx, floor + 0.05 * sc, sc * 0.7, 1, id, b, pose);
-    if (act === '看录像' && note.target) cap += ` · 研究 ${note.target}（了解度 ${(entry.before.knowledge[note.target] || 0).toFixed(2)} → ${(entry.after.knowledge[note.target] || 0).toFixed(2)}）`;
-  } else if (act.startsWith('对练')) {
-    const clip = D.clips[`${entry.day}_${id}`];
-    if (clip) {
-      const rep = clip.rep || (clip.rep = prepRep({ frames: clip.frames, bodies: clip.bodies }));
-      drawBout(c, rep, (t * 20) % rep.frames.length, [x0, y0, w, h], { gym: true, ids: [id, 'S'], labels: [id, clip.partner] });
-    } else { drawFigure(c, cx, floor, sc, 1, id, b, base); }
-    if (note.iters) cap += ` · 训练 ${note.iters} 轮（实打 ${note.bouts_won} 胜 ${note.bouts_lost} 负）`;
-  } else if (act === '战术会议') {
-    c.fillStyle = '#e9e7df'; c.fillRect(x0 + w * 0.1, y0 + h * 0.1, w * 0.8, h * 0.55);
-    const nextF = D.fights.find(f => f.day >= entry.day);
-    const side = nextF ? nextF.fighters.indexOf(id) : -1;
-    const rank = nextF && side >= 0 ? nextF.plans[side].rank : [];
-    rank.slice(0, 6).forEach(([p, s], i) => {
-      const yy = y0 + h * 0.16 + i * h * 0.08;
-      c.fillStyle = '#333'; c.font = `${Math.max(11, h * 0.045)}px system-ui`; c.textAlign = 'left'; c.fillText(D.sim.plans[p], x0 + w * 0.14, yy + h * 0.035);
-      c.fillStyle = i === 0 ? '#1baf7a' : '#8aa4c8'; c.fillRect(x0 + w * 0.42, yy, Math.max(4, (s + 1) / 2 * w * 0.42 * Math.min(1, t / 2)), h * 0.05);
-    });
-    drawFigure(c, x0 + w * 0.08, floor, sc * 0.8, 1, id, b, { lead: [0.4, 0.4], rear: [0.1, -0.2] });
-  } else {
-    drawFigure(c, cx, floor, sc, 1, id, b, base);
-  }
-  c.fillStyle = 'rgba(0,0,0,0.55)'; c.fillRect(x0, y0 + h - 30, w, 30);
-  c.fillStyle = COLOR[id]; c.fillRect(x0, y0 + h - 30, 6, 30);
-  c.fillStyle = '#fff'; c.font = '600 14px system-ui'; c.textAlign = 'left'; c.fillText(`${id} · ${cap}`, x0 + 14, y0 + h - 10);
-  if (note.injured) { c.fillStyle = '#ff5a4f'; c.fillText('训练中受伤！', x0 + w - 110, y0 + 22); }
-  c.restore();
+// 开场"身材对比"
+function fightMeta(fg, idx) {
+  const rows = [];
+  const top = id => { const sk = D.cards[id].skills.slice(0, 12); return D.tech_names[sk.indexOf(Math.max(...sk))]; };
+  const rec = id => { const r = D.final[id].record.slice(0, idx); const w = r.filter(x => x.result === '胜').length, l = r.filter(x => x.result === '负').length, d = r.length - w - l; return `${w} 胜 ${l} 负 ${d} 平`; };
+  const B = fg.fighters.map((id, k) => VIZ.build(fg.bodies[k]));
+  rows.push(['身高', ...B.map(b => b.H.toFixed(2) + ' 米')]);
+  rows.push(['臂展', ...fg.bodies.map(b => b.reach.toFixed(2) + ' 米')]);
+  rows.push(['称重', ...fg.weigh_in.map(w => w.mass + ' 公斤')]);
+  rows.push(['流派', ...fg.fighters.map(id => D.cards[id].school)]);
+  rows.push(['战绩', ...fg.fighters.map(rec)]);
+  rows.push(['招牌技', ...fg.fighters.map(top)]);
+  rows.push(['属性总分', ...fg.fighters.map(id => D.cards[id].budget[0])]);
+  return { names: fg.fighters.map(id => NAME[id]), tale: rows };
+}
+const DAY_LEN = 6;      // 训练日的画面循环 6 秒（最后一段是夜里的兑现卡片）
+function itemDuration(d) { return d.type === 'fight' ? (d.fight._tl || (d.fight._tl = VIZ.timeline(d.fight))).total : DAY_LEN; }
+function drawItem(c, d, t, box) {
+  if (d.type === 'fight') return VIZ.renderFight(c, d.fight, t, box, d.meta || (d.meta = fightMeta(d.fight, d.idx)));
+  const [x0, y0, w, h] = box;
+  VIZ.drawTraining(c, 'A', d.row.A, [x0, y0, w / 2 - 2, h], t, TRAIN_CTX);
+  VIZ.drawTraining(c, 'B', d.row.B, [x0 + w / 2 + 2, y0, w / 2 - 2, h], t, TRAIN_CTX);
+  c.fillStyle = 'rgba(0,0,0,0.65)'; c.fillRect(x0 + w / 2 - 80, y0 + 10, 160, 30);
+  c.fillStyle = '#fff'; c.font = '700 15px "Microsoft YaHei", system-ui'; c.textAlign = 'center'; c.fillText(`训练营 · 第 ${d.row.day} 天`, x0 + w / 2, y0 + 31);
 }
 
 // ---------------------------------------------------------------- 选中某一天
@@ -526,11 +210,9 @@ let SEL = 0, T = 0, playing = false, lastTs = 0, speed = 1;
 function select(i) {
   SEL = Math.max(0, Math.min(DAYS.length - 1, i)); T = 0;
   const d = DAYS[SEL];
-  SEL_DAY = d.type === 'fight' ? d.fight.day : d.row.day;
   document.querySelectorAll('.tl .col').forEach((el, j) => el.classList.toggle('sel', j === SEL));
   const el = document.querySelector(`.tl .col[data-i="${SEL}"]`); if (el) el.scrollIntoView({ inline: 'center', block: 'nearest' });
-  const sc = document.getElementById('scrub');
-  if (d.type === 'fight') { prepRep(d.fight); sc.max = d.fight.frames.length - 1; } else sc.max = 400;
+  const sc = document.getElementById('scrub'); sc.max = Math.round(itemDuration(d) * 100); sc.step = 1;
   document.getElementById('jump').style.display = d.type === 'fight' ? '' : 'none';
   info(d); setPlaying(true);
 }
@@ -572,42 +254,58 @@ function render() {
   size();
   const d = DAYS[SEL];
   ctx.clearRect(0, 0, W, H);
-  if (d.type === 'fight') {
-    const { t } = drawBout(ctx, d.fight, T, [0, 0, W, H], { ids: d.fight.fighters });
-    hud(ctx, d.fight, t, d.fight.title);
-    document.getElementById('scrub').value = t;
-    if (t >= d.fight.frames.length - 1) {
-      const r = d.fight.result;
-      ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, H * 0.4, W, H * 0.2);
-      ctx.fillStyle = '#fff'; ctx.font = `800 ${Math.round(W / 24)}px system-ui`; ctx.textAlign = 'center';
-      ctx.fillText(r.winner ? `${NAME[r.winner]}  ${r.method} 获胜` : '平局', W / 2, H * 0.52);
-    }
-  } else {
-    scene(ctx, 'A', d.row.A, [0, 0, W / 2 - 2, H], T / 20);
-    scene(ctx, 'B', d.row.B, [W / 2 + 2, 0, W / 2 - 2, H], T / 20);
-    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(W / 2 - 60, 8, 120, 26);
-    ctx.fillStyle = '#fff'; ctx.font = '600 14px system-ui'; ctx.textAlign = 'center'; ctx.fillText(`训练营 · 第 ${d.row.day} 天`, W / 2, 26);
-    document.getElementById('scrub').value = T % 400;
-  }
+  drawItem(ctx, d, d.type === 'fight' ? T : T % DAY_LEN, [0, 0, W, H]);
+  document.getElementById('scrub').value = Math.round((d.type === 'fight' ? T : T % DAY_LEN) * 100);
 }
 function loop(ts) {
   if (playing) {
-    if (lastTs) T += (ts - lastTs) / 1000 / D.sim.DT * speed;
+    if (lastTs) T += (ts - lastTs) / 1000 * speed;
     lastTs = ts;
-    const d = DAYS[SEL];
-    if (d.type === 'fight' && T >= d.fight.frames.length - 1) { T = d.fight.frames.length - 1; setPlaying(false); }
+    const d = DAYS[SEL], dur = itemDuration(d);
+    if (d.type === 'fight' && T >= dur) { T = dur - 0.001; setPlaying(false); }
   }
   render();
   requestAnimationFrame(loop);
 }
 function setPlaying(on) { playing = on; lastTs = 0; document.getElementById('play').textContent = on ? '❚❚ 暂停' : '▶ 播放'; }
-document.getElementById('play').onclick = () => { const d = DAYS[SEL]; if (d.type === 'fight' && T >= d.fight.frames.length - 1) T = 0; setPlaying(!playing); };
-document.getElementById('scrub').oninput = e => { T = +e.target.value; };
+document.getElementById('play').onclick = () => { const d = DAYS[SEL]; if (d.type === 'fight' && T >= itemDuration(d) - 0.01) T = 0; setPlaying(!playing); };
+document.getElementById('scrub').oninput = e => { T = +e.target.value / 100; };
 document.getElementById('speed').onchange = e => { speed = +e.target.value; };
 document.getElementById('prevDay').onclick = () => select(SEL - 1);
 document.getElementById('nextDay').onclick = () => select(SEL + 1);
-document.getElementById('jump').onclick = () => { const d = DAYS[SEL]; if (d.type !== 'fight') return; const e = d.fight.events.find(e => e.t > T + 2); if (e) T = Math.max(0, e.t - 15); };
-window.addEventListener('keydown', e => { if (e.key === 'ArrowRight') select(SEL + 1); if (e.key === 'ArrowLeft') select(SEL - 1); });
+document.getElementById('jump').onclick = () => {
+  // 跳到下一个击倒、反击或重拳（换算到转播时间线上）
+  const d = DAYS[SEL]; if (d.type !== 'fight') return;
+  const fg = VIZ.prep(d.fight), tl = fg._tl || (fg._tl = VIZ.timeline(fg));
+  const outOf = tick => { for (const s of tl.segs) if (s.type === 'live' && tick >= s.from && tick < s.to) return s.start + (tick - s.from) / 20; return null; };
+  const nxt = fg._prep.events.filter(e => e.big >= 2).map(e => outOf(e.t)).filter(x => x !== null && x > T + 0.3).sort((a, b) => a - b)[0];
+  if (nxt !== undefined) T = Math.max(0, nxt - 1.5);
+};
+window.addEventListener('keydown', e => { if (e.key === 'ArrowRight') select(SEL + 1); if (e.key === 'ArrowLeft') select(SEL - 1); if (e.key === ' ') { e.preventDefault(); setPlaying(!playing); } });
+
+// ---------------------------------------------------------------- 导出视频用的接口（tools/export_video.mjs 调用）
+window.EXPORT = {
+  items: () => DAYS.map((d, i) => ({ i, type: d.type, title: d.type === 'fight' ? d.fight.title : `第 ${d.row.day} 天`, dur: itemDuration(d) })),
+  frame: (i, t, w, h) => {
+    const oc = window._oc || (window._oc = document.createElement('canvas'));
+    oc.width = w; oc.height = h;
+    const c = oc.getContext('2d');
+    c.clearRect(0, 0, w, h);
+    drawItem(c, DAYS[i], DAYS[i].type === 'fight' ? t : t % DAY_LEN, [0, 0, w, h]);
+    return oc.toDataURL('image/jpeg', 0.92);
+  },
+  // 声音事件（条目内时间 from~to 秒）。训练日的 dayLen 是导出时每天播多久
+  audio: (i, from, to) => {
+    const d = DAYS[i];
+    if (d.type === 'fight') return VIZ.fightAudio(d.fight, from, to, d.meta || (d.meta = fightMeta(d.fight, d.idx)));
+    const both = [...VIZ.trainingAudio(d.row.A, 'A', from, to, -0.5, TRAIN_CTX), ...VIZ.trainingAudio(d.row.B, 'B', from, to, 0.5, TRAIN_CTX)];
+    // 夜里的兑现卡片是两人共用的一张，提示音只响一次、居中
+    const seen = new Set();
+    const ev = both.filter(e => e.type !== 'night' || (!seen.has(e.t) && seen.add(e.t))).map(e => e.type === 'night' ? { ...e, pan: 0 } : e);
+    ev.push({ t: from, type: 'bed', to, kind: 'music', level: 0.5 });
+    return ev;
+  },
+};
 
 // ---------------------------------------------------------------- 疲劳曲线、赛季前后对比
 (function charts() {
