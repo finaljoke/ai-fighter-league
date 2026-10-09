@@ -660,6 +660,8 @@ class Sim:
         defended_now = got_blocked | evaded[:, ::-1] | (got_clean & trying)
         unans = np.where(clean | defended_now | (stun < STUN_HURT), 0, unans)
         stop = ((hp <= 0) | (unans >= UNANSWERED_STOP) | (kd_round >= 3)) & ~done[:, None]
+        # 只用于统计：TKO 是怎么判的。1 血条归零 2 受伤后连续挨打不还手 3 一回合倒三次
+        tko_cause = np.where(stop.any(1), np.select([(kd_round >= 3).any(1), (unans >= UNANSWERED_STOP).any(1)], [3, 2], 1), 0)
         if stop.any():
             st_env = stop.any(1)
             winner = np.where(st_env, np.where(stop[:, 0] & stop[:, 1], -1, np.where(stop[:, 0], 1, 0)), winner)
@@ -842,7 +844,10 @@ class Sim:
                 "points": pts, "kd": kd, "faked": faked, "clinch": cl_ok, "pivot": do_piv,
                 "blocked_by": np.where(blocked, gtype, 0)[:, ::-1], "def_start": np.where(do_def, dcode, -1), "winner": winner, "method": method, "done": done,
                 "ko": done & ((method == M_KO) | (method == M_TKO)), "gap": dist3, "round": rnd,
-                "judges": judge.copy()}
+                "judges": judge.copy(), "tko_cause": tko_cause,
+                # 只用于统计，口径对齐 CompuBox：打在拳套和手臂上的不算命中。被自然站姿削弱的按比例折算
+                # （手本来在脸边，有一部分拳会打在手套上），射程边缘擦到的不算
+                "landed_cb": np.where(clean & ~glance, np.minimum(m, 1.0), 0.0)}
         self.ptr = (self.ptr + 1) % HIST
         self.hist[self.ptr] = self._snapshot()
         # 读招：对手出了什么拳。真拳在打出那一刻才确认是真的，虚晃在收回那一刻才露馅；再按反应延迟"看见"

@@ -132,7 +132,8 @@ class Agent:
         return Policy([p.copy() for p in self.pi.params])
 
     def update(self, obs, act, old_lp, adv, ret, pmask, vmask, rng,
-               epochs=4, mb=4096, clip=0.2, ent_coef=0.01, amask=None):
+               epochs=4, mb=4096, clip=0.2, ent_coef=0.01, amask=None, pi_update=True):
+        """pi_update=False：只练价值网络（接着旧档训练时先热身，检查点里没存价值网络）。"""
         n = len(obs)
         sel = pmask > 0
         if sel.sum() > 1:
@@ -161,7 +162,8 @@ class Agent:
                 onehot[ar[:k], a] = 1
                 H = -(p * lp_all).sum(1)
                 d = g_lp[:, None] * (onehot - p) + ent_coef * (m / M)[:, None] * p * (lp_all + H[:, None])
-                self.opt_pi.step(self.pi.backward(acts, d.astype(np.float32)))
+                if pi_update:
+                    self.opt_pi.step(self.pi.backward(acts, d.astype(np.float32)))
 
                 v, vacts = self.vf.forward(o)
                 err = v[:, 0] - ret[idx]

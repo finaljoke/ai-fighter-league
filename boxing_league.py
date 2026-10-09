@@ -17,6 +17,8 @@ class Bout:
         self.winner = np.full(n, -1)
         self.method = np.zeros(n, np.int64)
         self.judges = np.zeros((n, 3, 2))
+        self.tko_cause = np.zeros(n, np.int64)
+        self.end_round = np.zeros(n, np.int64)
         self.init = None
         self.seed = None
         self.n_rounds = B.N_ROUNDS
@@ -77,12 +79,15 @@ def run_matches(bodies, ctrls, names, n, seed, n_rounds=B.N_ROUNDS, skills=None,
                counter=info["counter"], kd=info["kd"], faked=info["faked"], clinch=info["clinch"],
                pivot=info["pivot"], points=info["points"].astype(np.float32),
                posture=sim.posture.astype(np.int8), stance=sim.stance.astype(np.int8), tilt=sim.tilt > 0,
-               plan=sim.plan.astype(np.int8))
+               plan=sim.plan.astype(np.int8), landed_cb=info["landed_cb"].astype(np.float32),
+               stam=(sim.stam / sim.stam_max[None, :]).astype(np.float32))
         newly = done & alive
         bt.end[newly] = t + 1
         bt.winner[newly] = info["winner"][newly]
         bt.method[newly] = info["method"][newly]
         bt.judges[newly] = info["judges"][newly]
+        bt.tko_cause[newly] = info["tko_cause"][newly]
+        bt.end_round[newly] = info["round"][newly]
         alive &= ~done
         t += 1
     bt.trim(t)

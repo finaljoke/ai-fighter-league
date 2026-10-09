@@ -47,6 +47,17 @@ def main():
     ap.add_argument("--stall-gap", type=float, default=2.0)
     ap.add_argument("--stall-penalty", type=float, default=None)
     ap.add_argument("--draw-penalty", type=float, default=None)
+    # 接着旧档训练（对照实验用）：--init b2 或 b2:50。检查点只有出招网络，价值网络从头练，先热身 --vf-warmup 轮只练价值网络
+    ap.add_argument("--init", default=None)
+    ap.add_argument("--vf-warmup", type=int, default=0)
+    # 奖励构成（对照实验用）：不给就用 boxing.py 里的默认值（每分 0.02、击倒 0.3）
+    ap.add_argument("--point-reward", type=float, default=None)
+    ap.add_argument("--kd-reward", type=float, default=None)
+    # 留力训练（实验 1b）：每场开打前抽签，floor-frac 的比赛给双方各设一条体能线（floor-lo~floor-hi 之间随机），
+    # 体能低于线时不准出拳。只在训练时有，AI 看不到，评估和正式比赛都没有
+    ap.add_argument("--floor-frac", type=float, default=0.0)
+    ap.add_argument("--floor-lo", type=float, default=0.2)
+    ap.add_argument("--floor-hi", type=float, default=0.6)
     args = ap.parse_args()
     box = args.sim == "boxing"
     S = boxing if box else sim1d
@@ -57,6 +68,10 @@ def main():
     for k, v in defaults.items():
         if getattr(args, k) is None:
             setattr(args, k, v)
+    if box and args.point_reward is not None:
+        boxing.REWARD_PER_POINT = args.point_reward
+    if box and args.kd_reward is not None:
+        boxing.REWARD_KD = args.kd_reward
 
     run_dir = os.path.join("runs", args.run)
     if os.path.exists(run_dir):
@@ -65,6 +80,7 @@ def main():
     bodies = (LANKY, STOCKY)
     with open(os.path.join(run_dir, "config.json"), "w", encoding="utf-8") as f:
         json.dump({"args": vars(args), "sim_version": S.SIM_VERSION,
+                   "reward": {"per_point": boxing.REWARD_PER_POINT, "kd": boxing.REWARD_KD} if box else None,
                    "bodies": [b.to_dict() for b in bodies],
                    "started": time.strftime("%Y-%m-%d %H:%M:%S")}, f, ensure_ascii=False, indent=2)
 
@@ -85,6 +101,22 @@ def main():
     drill = np.stack([SC.drill(b) for b in bodies]) if box else None        # 流派：哪些技术练得勤
     iq = np.array([SC.mind(b)[1] for b in bodies]) if box else None          # 拳商高的练得快
     skills = talent.copy() if box else None
+    if args.init:
+        from analyze import load_run
+        name, _, ver = args.init.partition(":")
+        src = load_run(name, int(ver) if ver else None)
+        for side, body in enumerate(bodies):
+            for p, q in zip(agents[side].pi.params, src["pols"][body.id].params):
+                p[...] = q                      # 原地拷贝，优化器还指着这些数组
+            if box and "skills" in src["pick"][body.id]:
+                skills[side] = np.array(src["pick"][body.id]["skills"])
+        with open(os.path.join(run_dir, "config.json"), "r+", encoding="utf-8") as f:
+            cfg = json.load(f)
+            cfg["init"] = {"run": name, "version": src["version"],
+                           "sha256": {c: v["sha256"] for c, v in src["pick"].items()}}
+            f.seek(0); json.dump(cfg, f, ensure_ascii=False, indent=2); f.truncate()
+        if box:
+            sim.set_skills(skills)
 
     def snapshot(it):
         ver = len(pool[0])
@@ -119,8 +151,19 @@ def main():
                 w = pw * (1 - pw) + 0.02
                 ctrl[pick, 1 - side] = rng.choice(len(w), size=pick.size, p=w / w.sum())
 
+    floor = np.zeros((N, 2))
+    punches = np.arange(boxing.PUNCH0, boxing.PUNCH0 + 12) if box else None
+
+    def new_floors(mask):
+        idx = np.flatnonzero(mask)
+        if not idx.size or args.floor_frac <= 0:
+            return
+        on = rng.random(idx.size) < args.floor_frac
+        floor[idx] = np.where(on[:, None], rng.uniform(args.floor_lo, args.floor_hi, (idx.size, 2)), 0.0)
+
     snapshot(0)
     assign(np.ones(N, bool))
+    new_floors(np.ones(N, bool))
     obs = sim.observe()
     t0 = time.time()
     for it in range(1, args.iters + 1):
@@ -140,6 +183,9 @@ def main():
         for t in range(T):
             acts = np.zeros((N, 2), np.int64)
             amask = sim.plan_mask() if box else None          # 战术计划限制的动作
+            if box and args.floor_frac > 0:
+                low = sim.stam < floor * sim.stam_max[None, :]
+                amask[:, :, punches] &= ~low[:, :, None]
             for side in (0, 1):
                 msk = amask[:, side] if box else None
                 a, lp, v = agents[side].act(obs[:, side], rng, msk)
@@ -180,6 +226,7 @@ def main():
             if box:
                 practice_counts(info, acts, ctrl < 0, sim, usage, succ, learn_ticks)
             assign(done)
+            new_floors(done)
             obs = sim.observe()
 
         if res["eps"] >= 10:                    # 当前版本互打一边倒时，弱的一方多打历史版本
@@ -197,7 +244,7 @@ def main():
                 flat(B_obs[:, :, side]), flat(B_act[..., side]), flat(B_lp[..., side]),
                 flat(adv), flat(ret), flat(B_learn[..., side] * B_acted[..., side] * ~B_lapse[..., side]),
                 flat(B_learn[..., side]), rng, ent_coef=ent,
-                amask=flat(B_mask[:, :, side]) if box else None)
+                amask=flat(B_mask[:, :, side]) if box else None, pi_update=it > args.vf_warmup)
             stats[bodies[side].id] = st
 
         if box:

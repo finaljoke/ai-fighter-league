@@ -698,6 +698,36 @@ tal = [SCH.talent(b).sum() for b in league]
 check("天赋总量相同（含流派加成），只是分布不同", abs(tal[0] - tal[1]) <= 0.15, f"A {tal[0]:.2f}，B {tal[1]:.2f}")
 
 
+# ------------------------------------------------------------------ 统计口径（只统计，不影响比赛）
+def landed_of(posture=B.P_STANDARD, hold1=B.STAY, gap=1.0):
+    s = make(gap)
+    s.posture[0, 1] = posture
+    inf = run(s, {0: B.JAB_H}, ticks=12, hold1=hold1)
+    return [round(float(i["landed_cb"][0, 0]), 3) for i in inf if i["fired"][0, 0]]
+
+
+edge = float(make().rng_tab[0, 0]) - 0.005
+l_std, l_low, l_guard, l_edge = landed_of(), landed_of(B.P_LOW), landed_of(hold1=B.GUARD_HIGH), landed_of(gap=edge)
+check("统计口径（CompuBox）：刺拳打中站着的人按自然站姿折成 0.7 记命中，低手位算 1 记，打在架子上、射程边缘擦到的不算",
+      l_std == [0.7] and l_low == [1.0] and l_guard == [0.0] and l_edge == [0.0],
+      f"站姿 {l_std}，低手位 {l_low}，举架 {l_guard}，擦到 {l_edge}")
+
+
+def tko_cause_of(setup, a0, ticks, x0=None):
+    s = make(1.0, x0=x0)
+    setup(s)
+    end = [i for i in run(s, a0, ticks=ticks) if i["done"][0]]
+    return (B.METHOD_NAMES[end[0]["method"][0]], int(end[0]["tko_cause"][0])) if end else None
+
+
+c_hp = tko_cause_of(lambda s: s.hp.__setitem__((0, 1), 0.5), {0: B.CROSS_H}, 10)
+c_un = tko_cause_of(lambda s: s.stun.__setitem__((0, 1), 85), {k * 8: B.JAB_H for k in range(10)}, 85, x0=B.RING - B.BODY_R - 1.0)
+c_kd = tko_cause_of(lambda s: (s.stun.__setitem__((0, 1), 99), s.kd_round.__setitem__((0, 1), 2), s.kd_total.__setitem__((0, 1), 2)),
+                    {0: B.CROSS_H}, 10)
+check("统计口径：TKO 记下原因（1 血条归零、2 受伤后连续挨打不还手、3 一回合倒三次）",
+      c_hp == ("TKO", 1) and c_un == ("TKO", 2) and c_kd == ("TKO", 3), f"血条 {c_hp}，连续挨打 {c_un}，倒三次 {c_kd}")
+
+
 if __name__ == "__main__":
     ok = sum(r[1] for r in RESULTS)
     for name, passed, detail in RESULTS:

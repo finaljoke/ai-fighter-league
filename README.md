@@ -16,6 +16,7 @@ py -X utf8 test_techniques.py                     # 技术验收：每个技术�
 $env:OPENBLAS_NUM_THREADS=1
 py -X utf8 train.py --run b1 --sim boxing --seed 1 --iters 1000   # 训练（每 20 轮存一个版本并自测）
 py -X utf8 analyze_boxing.py --run b1               # 报告：技术使用表、战绩、打法对比、成长曲线、回放
+py -X utf8 calibrate.py --run b1                    # 真实度校准：命中率、出拳量、累垮等对照真实比赛的目标
 ```
 
 报告在 `runs/boxing_report_b1_v<版本>.html`。训练没跑完也能对任意已存版本出报告（`--version 12`）。
@@ -28,6 +29,7 @@ py -X utf8 analyze_boxing.py --run b1               # 报告：技术使用表�
 | `boxing_bots.py` | 拳击标准陪练（量尺） |
 | `boxing_league.py` | 比赛、打法指标、技术使用表、回放 |
 | `analyze_boxing.py` + `boxing_report_template.html` | 拳击报告（俯视回放播放器） |
+| `calibrate.py` | 真实度校准：按 CompuBox 口径统计，对照规格文档"真实度目标"打勾 |
 
 角色模型（全文见规格文档"角色模型"一节）：
 身体属性、天赋熟练度、性格（胆量 / 沉着 / 斗志 / 冲动）、心智（观察力 / 拳商）、流派（`schools.py`）、
