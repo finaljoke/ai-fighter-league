@@ -44,6 +44,8 @@ py -X utf8 season.py --run b1 --name s0                     # 接手训练好的
 py -X utf8 render_season.py --name s0                       # 改了画面代码后，只重新生成观看页（不重跑比赛）
 node tools/export_video.mjs runs/season_s0.html runs/第1战.mp4 --items 0                 # 导出一场比赛
 node tools/export_video.mjs runs/season_s0.html runs/训练营.mp4 --items 1-35 --day-len 3  # 导出训练营（每天 3 秒）
+py -X utf8 make_episode.py --run canon_s1,canon_s1b          # 试播集页面（正史分几段练的按先后列出）
+node tools/export_video.mjs runs/episode_pilot.html runs/试播集.mp4 --items all
 ```
 
 导出视频要先在 `tools/` 下 `npm install`（只装 puppeteer-core，用本机的 Edge），本机要有 ffmpeg，Python 要装 numpy 和 edge-tts。
@@ -57,6 +59,8 @@ node tools/export_video.mjs runs/season_s0.html runs/训练营.mp4 --items 1-35 
 | `viz.js` | 转播画面渲染：拳手骨骼与造型、动作、跟拍镜头、擂台、开场卡、回合统计、读秒、慢镜回放、判定、训练场景。观看页和导出视频共用 |
 | `season_template.html` | 赛季观看页（时间线、比赛、训练场、疲劳曲线） |
 | `tools/export_video.mjs` | 把观看页的画面逐帧导出成 mp4，再配上音轨 |
+| `make_episode.py` + `episode_template.html` | 试播集：片头、人物介绍、成长片段（`train.py --record` 的成长档案和里程碑）、首战（只打一次存档，结果不重来）、片尾。人设和立绘读本地 `characters/`，不进仓库 |
+| `tools/preview_frames.mjs` | 抽几帧截图看画面，不用导整片 |
 | `tools/make_audio.py` | 按声音事件表合成音轨（音效、观众、训练节拍、解说），事件表由 `viz.js` 从同一条时间线算出 |
 
 ## 一维原型

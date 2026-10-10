@@ -118,7 +118,7 @@ def growth_clips(runs, milestones, coach):
             voice = "刚出生的他们，还不知道拳该往哪里打。"
         elif new:
             m = (big or new)[-1]
-            cap = {"text": f"{m['name'].split('·')[0]} {m['event']}{vs(m['iter'])}", "sub": f"训练第 {m['iter']} 轮 · 第 {m['fights']} 场左右", "big": bool(big)}
+            cap = {"text": f"{m['name'].split('·')[0]} {m['event']}{vs(m['iter'])}", "sub": f"{'这段之前 · ' if m['iter'] < g['iter'] else ''}训练第 {m['iter']} 轮 · 第 {m['fights']} 场左右", "big": bool(big)}
             voice = f"训练第{m['iter']}轮，{m['name'].split('·')[0]}{m['event']}{'，对手是陪练教练' if m['iter'] <= coach else ''}。"
         else:
             cap = None

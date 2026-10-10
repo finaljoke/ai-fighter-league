@@ -127,8 +127,9 @@ const VIZ = (() => {
     if (nearIsRear) arm(shRear, rear, pose.rearBig, pose.rearBody, false, L.glove); else arm(shLead, lead, pose.leadBig, pose.leadBody, false, L.glove);
     if (pose.label) {
       c.font = `700 ${Math.max(11, 0.15 * s)}px system-ui, "Microsoft YaHei"`; c.textAlign = 'center';
-      c.fillStyle = 'rgba(0,0,0,0.45)'; c.fillText(pose.label, X(headC[0]) + 1, Y(headC[1] + B.headR * 2.4) + 1);
-      c.fillStyle = '#ffffff'; c.fillText(pose.label, X(headC[0]), Y(headC[1] + B.headR * 2.4));
+      const ly = Y(headC[1] + B.headR * 2.4), lx = X(headC[0]) + (pose.labelDx || 0);
+      c.fillStyle = 'rgba(0,0,0,0.45)'; c.fillText(pose.label, lx + 1, ly + 1);
+      c.fillStyle = '#ffffff'; c.fillText(pose.label, lx, ly);
     }
   }
 
@@ -446,6 +447,8 @@ const VIZ = (() => {
       c.fillStyle = 'rgba(0,0,0,0.28)'; c.beginPath(); c.ellipse(sx, sy, 0.4 * sc, 0.09 * sc, 0, 0, Math.PI * 2); c.fill();
       const pose = poseAt(rep, tf, k);
       if (opts.labels) pose.label = opts.labels[k];
+      // 贴身时两人名字会叠在一起：各往自己那侧横向让开（往上错会钻进顶栏）
+      if (Math.abs(ox - sx) < 0.9 * sc) pose.labelDx = (sx < ox || (sx === ox && k === 0) ? -1 : 1) * (0.45 * sc - Math.abs(ox - sx) / 2);
       drawBoxer(c, sx, sy, sc, dir, ids[k], rep.bodies[k], pose, fr.f[k][F.st] < 0 ? -1 : 1);
     }
     near();
@@ -504,6 +507,10 @@ const VIZ = (() => {
     const fs = Math.round(w / 20);
     c.font = `900 ${fs}px "Microsoft YaHei", system-ui`; c.textAlign = 'center';
     const yy = y0 + h * (opts.y || 0.84);
+    // 底下垫一条渐变暗带，字幕不跟擂台裙边上的字搅在一起
+    const bh = fs * (sub ? 2.1 : 1.6), g = c.createLinearGradient(0, yy - fs * 1.1, 0, yy - fs * 1.1 + bh);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.25, 'rgba(0,0,0,0.55)'); g.addColorStop(0.8, 'rgba(0,0,0,0.55)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = g; c.fillRect(x0, yy - fs * 1.1, w, bh);
     c.lineWidth = fs * 0.14; c.strokeStyle = 'rgba(0,0,0,0.75)'; c.strokeText(text, x0 + w / 2, yy);
     c.fillStyle = col || '#ffd24a'; c.fillText(text, x0 + w / 2, yy);
     if (sub) { c.font = `700 ${fs * 0.42}px "Microsoft YaHei"`; c.lineWidth = 4; c.strokeText(sub, x0 + w / 2, yy + fs * 0.6); c.fillStyle = '#fff'; c.fillText(sub, x0 + w / 2, yy + fs * 0.6); }
