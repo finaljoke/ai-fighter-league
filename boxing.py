@@ -7,7 +7,7 @@
 """
 import numpy as np
 
-SIM_VERSION = "box2d-v10"
+SIM_VERSION = "box2d-v11"
 
 DT = 0.05
 RING = 6.1
@@ -36,6 +36,11 @@ PULL_DIST = 0.25
 NEUTRAL_GAP = 2.0
 UNANSWERED_STOP = 8
 HOLDS_WARN = 4
+# 免费动作的代价（v11，技术真实度审计第 1 批）。数字是起点
+POSTURE_COST, STANCE_COST = 2.0, 3.0      # 换架势、换站架花的体能
+SWITCH_EXPOSED = 1.3                      # 换的那几帧重心不稳、没有自然站姿保护，挨打 ×1.3
+CLINCH_COST, CLINCH_FAIL_REC = 2.0, 8     # 抱一次花 2 体能；没抱住（包括够不着去扑）收招 8 帧，这时挨打按反击算
+PIVOT_COST, PIVOT_HEAT_DECAY = 1.5, 0.97  # 轴转越连续越贵：花 1.5 ×（1 + 最近轴转的热度），热度每帧 ×0.97
 STANCE_SIGN = {"orthodox": 1.0, "southpaw": -1.0}
 
 # ------------------------------------------------------------------ 动作
@@ -379,6 +384,7 @@ class Sim:
         self.luck_seed, self.tick = z(dt=np.int64), z(dt=np.int64)
         self.su_cur, self.kd_sev = z(2, dt=np.int64), z(2)
         self.liver_t, self.winded_t = z(2, dt=np.int64), z(2, dt=np.int64)      # 肝区击倒倒计时（弯腰中）、心窝喘不上气
+        self.pivot_heat = z(2)                                                    # 最近轴转的热度（越连续越贵）
         self.hist = np.zeros((HIST, n, 2, 17))
         self.ptr = 0
         self.reset(np.ones(n, bool))
@@ -428,6 +434,7 @@ class Sim:
         self.tick[mask] = 0
         self.su_cur[mask], self.kd_sev[mask] = 0, 0.0
         self.liver_t[mask], self.winded_t[mask] = 0, 0
+        self.pivot_heat[mask] = 0.0
         gap, yo, tw = init[:, 0], init[:, 1], init[:, 2]
         self.form[mask] = init[:, 3:5]
         self.posture[mask] = self.posture0
@@ -554,6 +561,7 @@ class Sim:
         doubled_t = (self.liver_t > 0)[:, ::-1]      # 对手正弯着腰（肝区击倒的延迟里），手护着肚子
         liver_fall = self.liver_t == 1               # 延迟到了，这一帧倒下
         liver_t, winded_t = np.maximum(0, self.liver_t - 1), np.maximum(0, self.winded_t - 1)
+        pivot_heat = self.pivot_heat * PIVOT_HEAT_DECAY
         react_def = self.react_now()[:, ::-1]        # [:, i] = i 的对手此刻的反应延迟（判"没看见的拳"用）
         ev_rew = np.zeros((n, 2))
         done = np.zeros(n, bool)
@@ -634,7 +642,8 @@ class Sim:
         gsc = np.where(gtype == 1, gs[None, :, 0] * POSTURE_FX[posture[:, ::-1], FX_GUARD], np.where(gtype == 2, gs[None, :, 1], 1.0))
         gsc = gsc * np.where(tired_t, TIRED_GUARD, 1.0)
         gm = np.where(gm < 1.0, np.clip(1.0 - (1.0 - gm) * gsc, 0.02, 1.0), gm)
-        natural = (gtype == 0) & np.isin(ph_t, (FREE, MOVING)) & ~tired_t & ~doubled_t
+        switching_t = (ph_t == MOVING) & np.isin(mv_t, (M_POSTURE, M_STANCE))      # 正在换架势 / 换站架，重心不稳
+        natural = (gtype == 0) & np.isin(ph_t, (FREE, MOVING)) & ~tired_t & ~doubled_t & ~switching_t
         gm = np.where(natural, NATURAL_GUARD[posture[:, ::-1], cls], gm)
         m = np.where(is_def, EVADE_MULT[np.minimum(mv_t, N_MOVES - 1), cls], gm)
         eff = np.where(np.abs(off_t) > ANG_GUARD, 0.5, 1.0) * np.where(stun_t > STUN_HURT, 0.5, 1.0)
@@ -646,7 +655,8 @@ class Sim:
         blocked = landed & ~is_def & (gtype > 0) & (m < 0.5)
         clean = landed & ~blocked
         cramp = np.where((typ == 0) & (dist[:, None] < self.cramp[None, :]), 0.5, 1.0)
-        counter = clean & ((ph_t == STARTUP) | ((ph_t == RECOVERY) & missed[:, ::-1] & (mv_t < 12)))
+        counter = clean & ((ph_t == STARTUP) | ((ph_t == RECOVERY) & missed[:, ::-1] & (mv_t < 12))
+                           | ((ph_t == RECOVERY) & (mv_t == M_CLINCH)))           # 扑空的缠抱和打空的拳一样露破绽
         sf = np.clip(stam / self.stam_max, 0, 1)
         base = (DMG[p] * DMG_SCALE * self.power[None, :] * (0.5 + 0.5 * sf) * cramp * np.where(counter, COUNTER_DMG, 1.0)
                 * np.where(glance, GLANCE_MULT, 1.0) * self.dmg_mult[p, side])
@@ -658,7 +668,8 @@ class Sim:
         op = open_st[:, None]
         openm = np.where(op & ((p == 2) | (p == 3)), OPEN_CROSS_DMG, np.where(op & ((p == 4) | (p == 5)), OPEN_LHOOK_DMG,
                          np.where(op & (p <= 1), OPEN_JAB_DMG, 1.0)))
-        base = base * vs * openm * (1.0 + 0.08 * self.form) * np.where((tilt > 0) & (IS_POWER[p] == 1), TILT_POWER, 1.0)
+        base = (base * vs * openm * (1.0 + 0.08 * self.form) * np.where((tilt > 0) & (IS_POWER[p] == 1), TILT_POWER, 1.0)
+                * np.where(switching_t, SWITCH_EXPOSED, 1.0))
         dealt = np.where(landed, base * m / self.chin[::-1][None, :], 0.0)   # [:, i] = i 打出的
         head = tgt == 0
         # 落点：干净打中头部才抽。冲击和挨打者挨这一下之前的抗击打线比，越过得多越可能倒
@@ -758,10 +769,10 @@ class Sim:
         # 3) 缠抱成功与否
         cl_ok = clinch_try & (dist[:, None] <= self.clinch_reach[None, :] + 0.05) & (ph[:, ::-1] != DOWN) & ~got_clean
         cl_env = cl_ok.any(1)
-        holds += cl_ok
+        holds += clinch_try & ~got_clean                 # 裁判按抱的次数警告，没抱住的也算
         cl_fail = clinch_try & ~cl_ok & ~got_clean
         ph = np.where(cl_fail, RECOVERY, ph)
-        tm = np.where(cl_fail, 4, tm)
+        tm = np.where(cl_fail, CLINCH_FAIL_REC, tm)
         both = cl_env[:, None] & np.ones((1, 2), bool)
         ph = np.where(both, CLINCHED, ph)
         tm = np.where(both, CLINCH_TICKS, tm)
@@ -837,7 +848,7 @@ class Sim:
         back_room = ray_to_rope(pos, th + np.pi)
         do_def = free & (dcode != M_NONE) & (stam >= self.def_cost[side, dcode]) & ~((a == PULL) & (back_room < PULL_DIST))
         faked = do_def & (self.phase[:, ::-1] == STARTUP) & self.feint[:, ::-1]      # 被虚晃骗出了防守动作
-        comp = comp + np.where(faked, COMP_FAKED * (1.5 - courage), 0.0)
+        comp = comp + np.where(faked, COMP_FAKED * (1.5 - courage) * (1.0 - self.tend_feint), 0.0)   # 虚晃多了对手就不信
         tilt = np.where(faked & (temper > 0.5), np.maximum(tilt, (TILT_TICKS * (temper - 0.5) * 2).astype(int)), tilt)
         ph = np.where(do_def, DEFEND, ph)
         mv = np.where(do_def, dcode, mv)
@@ -848,20 +859,25 @@ class Sim:
         el = np.where(do_def, 0, el)
 
         _, dist2, _ = self._geom(pos, th)
-        do_cl = free & (a == CLINCH) & (dist2[:, None] <= self.clinch_reach[None, :]) & (ph[:, ::-1] != DOWN)
+        do_cl = free & (a == CLINCH) & (ph[:, ::-1] != DOWN) & (stam >= CLINCH_COST)    # 够不着也会扑过去，扑空就付代价
+        stam = stam - np.where(do_cl, CLINCH_COST, 0.0)
         ph = np.where(do_cl, STARTUP, ph)
         mv = np.where(do_cl, M_CLINCH, mv)
         tm = np.where(do_cl, 3, tm)
         el = np.where(do_cl, 0, el)
 
-        do_piv = free & ((a == PIVOT_L) | (a == PIVOT_R)) & (stam >= 1.5)
+        piv_cost = PIVOT_COST * (1.0 + pivot_heat)
+        do_piv = free & ((a == PIVOT_L) | (a == PIVOT_R)) & (stam >= piv_cost)
         ph = np.where(do_piv, MOVING, ph)
         mv = np.where(do_piv, np.where(a == PIVOT_L, M_PIVL, M_PIVR), mv)
         tm = np.where(do_piv, PIVOT_TICKS, tm)
-        stam = stam - np.where(do_piv, 1.5, 0.0)
+        stam = stam - np.where(do_piv, piv_cost, 0.0)
+        pivot_heat = pivot_heat + do_piv
         el = np.where(do_piv, 0, el)
 
-        do_sw = free & ((a == CHANGE_POSTURE) | (a == SWITCH_STANCE))
+        sw_cost = np.where(a == CHANGE_POSTURE, POSTURE_COST, STANCE_COST)
+        do_sw = free & ((a == CHANGE_POSTURE) | (a == SWITCH_STANCE)) & (stam >= sw_cost)
+        stam = stam - np.where(do_sw, sw_cost, 0.0)
         ph = np.where(do_sw, MOVING, ph)
         mv = np.where(do_sw, np.where(a == CHANGE_POSTURE, M_POSTURE, M_STANCE), mv)
         tm = np.where(do_sw, self.switch_ticks[None, :], tm)
@@ -979,7 +995,7 @@ class Sim:
         self.over = self.over | done
         self.comp, self.tend_def = comp, tend_def
         self.su_cur, self.kd_sev, self.tick = su_cur, kd_sev, self.tick + 1
-        self.liver_t, self.winded_t = liver_t, winded_t
+        self.liver_t, self.winded_t, self.pivot_heat = liver_t, winded_t, pivot_heat
         self.posture, self.stance, self.tilt = posture, stance, tilt
 
         outcome = np.where(clean, 1, np.where(blocked, 2, np.where(evaded, 3, np.where(fire, 4, 0))))
@@ -992,7 +1008,8 @@ class Sim:
                 # 只用于统计，口径对齐 CompuBox：打在拳套和手臂上的不算命中。被自然站姿削弱的按比例折算
                 # （手本来在脸边，有一部分拳会打在手套上），射程边缘擦到的不算
                 "landed_cb": np.where(clean & ~glance, np.minimum(m, 1.0), 0.0),
-                "zone": zone, "impact": impact, "flash_kd": flash, "liver_kd": liver_kd, "liver_fall": liver_fall}
+                "zone": zone, "impact": impact, "flash_kd": flash, "liver_kd": liver_kd, "liver_fall": liver_fall,
+                "clinch_start": do_cl}
         self.ptr = (self.ptr + 1) % HIST
         self.hist[self.ptr] = self._snapshot()
         # 读招：对手出了什么拳。真拳在打出那一刻才确认是真的，虚晃在收回那一刻才露馅；再按反应延迟"看见"

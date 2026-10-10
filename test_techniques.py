@@ -924,6 +924,55 @@ check("心窝：打中了喘不上气，体能多掉一大块、回得慢，但�
       f"打中心窝后体能 {st_px[px].mean():.0%}，打中其他部位 {st_px[ot].mean():.0%}，心窝倒地 {int(kd_px[px].sum())} 次")
 
 
+# ------------------------------------------------------------------ 免费动作的代价（v11）
+def one_tick_cost(gap, action):
+    s = make(gap)
+    st0 = s.stam[0, 0]
+    s.step(np.array([[action, B.STAY]]))
+    return st0 - s.stam[0, 0] + s.regen[0]          # 加回这一帧的自然回复
+
+
+d_still = dealt(run(make(1.0), {0: B.JAB_H}, ticks=8))
+d_sw = dealt(run(make(1.0), {0: B.JAB_H}, {0: B.SWITCH_STANCE}, ticks=8))
+d_po = dealt(run(make(1.0), {0: B.JAB_H}, {0: B.CHANGE_POSTURE}, ticks=8))
+c_sw, c_po = one_tick_cost(2.0, B.SWITCH_STANCE), one_tick_cost(2.0, B.CHANGE_POSTURE)
+check("换站架、换架势要花体能；换的那几帧重心不稳、没有自然站姿保护，挨打更重",
+      abs(c_sw - B.STANCE_COST) < 1e-6 and abs(c_po - B.POSTURE_COST) < 1e-6 and d_sw > 1.5 * d_still and d_po > 1.5 * d_still,
+      f"体能 换站架 {c_sw:.1f} / 换架势 {c_po:.1f}；挨一记刺拳 站着 {d_still:.2f}，换站架中 {d_sw:.2f}，换架势中 {d_po:.2f}")
+
+s = make(1.1)                                        # 后手直拳够得着，缠抱够不着
+inf = run(s, {0: B.CLINCH}, {3: B.CROSS_H}, ticks=14)
+hit = [i for i in inf if i["outcome"][0, 1] == 1]
+check("够不着去抱就是扑空：照样花体能、收招 8 帧，这时挨的拳按反击算；裁判把没抱住的也算进缠抱次数",
+      abs(one_tick_cost(1.1, B.CLINCH) - B.CLINCH_COST) < 0.2 and hit and hit[0]["counter"][0, 1] and s.holds[0, 0] == 1,
+      f"挨打 {'按反击算' if hit and hit[0]['counter'][0, 1] else '不算反击'}，缠抱次数 {s.holds[0, 0]}")
+
+s = make(3.0)
+costs = []
+for t in range(10):
+    act = B.PIVOT_L if t in (0, 4, 8) else B.STAY
+    st0 = s.stam[0, 0]
+    s.step(np.array([[act, B.STAY]]))
+    if act == B.PIVOT_L:
+        costs.append(st0 - s.stam[0, 0] + s.regen[0])
+check("轴转越连续越贵", costs[0] == B.PIVOT_COST and costs[0] < costs[1] < costs[2], f"连着三次轴转 {[round(c, 2) for c in costs]}")
+
+
+def faked_drop(tend):
+    s = make(1.0)
+    s.tend_feint[0, 1] = tend                          # 1 号觉得 0 号多爱虚晃
+    c0 = s.comp[0, 1]
+    run(s, {0: B.FEINT_JAB}, {1: B.SLIP}, ticks=3)
+    s2 = make(1.0)
+    s2.tend_feint[0, 1] = tend
+    run(s2, {}, {1: B.SLIP}, ticks=3)
+    return s2.comp[0, 1] - s.comp[0, 1]
+
+
+check("虚晃多了对手就不信：对手越觉得你爱虚晃，被骗时心态掉得越少",
+      faked_drop(0.0) > 3.9 and faked_drop(0.8) < 0.3 * faked_drop(0.0), f"对手没防备 {faked_drop(0.0):.1f}，对手看惯了 {faked_drop(0.8):.1f}")
+
+
 if __name__ == "__main__":
     ok = sum(r[1] for r in RESULTS)
     for name, passed, detail in RESULTS:

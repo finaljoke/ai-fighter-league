@@ -79,7 +79,9 @@ def run_matches(bodies, ctrls, names, n, seed, n_rounds=B.N_ROUNDS, skills=None,
                counter=info["counter"], kd=info["kd"], faked=info["faked"], clinch=info["clinch"],
                pivot=info["pivot"], points=info["points"].astype(np.float32),
                posture=sim.posture.astype(np.int8), stance=sim.stance.astype(np.int8), tilt=sim.tilt > 0,
-               plan=sim.plan.astype(np.int8), landed_cb=info["landed_cb"].astype(np.float32),
+               plan=sim.plan.astype(np.int8), landed_cb=info["landed_cb"].astype(np.float32), clinch_start=info["clinch_start"],
+               stun=sim.stun.astype(np.float32), move=sim.move.astype(np.int8),
+               card=(sim.judge[:, :, 0] - sim.judge[:, :, 1]).sum(1).astype(np.float32),
                stam=(sim.stam / sim.stam_max[None, :]).astype(np.float32))
         newly = done & alive
         bt.end[newly] = t + 1
@@ -194,7 +196,7 @@ def technique_table(bt, k):
     for name, a_code, m_code in DEF_ROWS:
         used = ((act == a_code) & acted & (f["phase"][:, :, k] == B.DEFEND)).sum()
         rows.append(("防守", name, int(used), int(((f["evaded_by"][:, :, k] == m_code) & v).sum()), "躲开 / 拍开对手的拳"))
-    rows.append(("防守", "缠抱", int(((act == B.CLINCH) & acted).sum()), int((f["clinch"][:, :, k] & v).sum()), "抱住"))
+    rows.append(("防守", "缠抱", int((f["clinch_start"][:, :, k] & v).sum()), int((f["clinch"][:, :, k] & v).sum()), "抱住（次数按真正发起的算）"))
     dist, off = _geom(bt)
     piv = f["pivot"][:, :, k] & v
     t_idx, n_idx = np.nonzero(piv)
@@ -203,8 +205,9 @@ def technique_table(bt, k):
     rows.append(("步法", "轴转", int(piv.sum()), int(gained.sum()), "转完对手正面线偏离 25° 以上"))
     rows.append(("步法", "横移", int((np.isin(act, (B.LEFT, B.RIGHT)) & acted).sum()), None, "按帧计"))
     rows.append(("步法", "举架压上", int(((act == B.GUARD_FWD) & acted).sum()), None, "按帧计"))
-    rows.append(("架势", "换架势", int(((act == B.CHANGE_POSTURE) & acted).sum()), None, "标准 / 长架 / 低姿 / 低手位轮换"))
-    rows.append(("架势", "换站架", int(((act == B.SWITCH_STANCE) & acted).sum()), None, "正架和反架互换"))
+    switching = acted & (f["phase"][:, :, k] == B.MOVING)        # 真正换成的才算（体能不够时按了也没用）
+    rows.append(("架势", "换架势", int((switching & (act == B.CHANGE_POSTURE)).sum()), None, "标准 / 长架 / 低姿 / 低手位轮换"))
+    rows.append(("架势", "换站架", int((switching & (act == B.SWITCH_STANCE)).sum()), None, "正架和反架互换"))
     feints = (np.isin(act, (B.FEINT_JAB, B.FEINT_CROSS)) & acted).sum()
     rows.append(("心理", "虚晃", int(feints), int((f["faked"][:, :, j] & v).sum()), "骗出对手的防守动作"))
     return rows
