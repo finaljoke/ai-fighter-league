@@ -62,6 +62,8 @@ def main():
     ap.add_argument("--record", type=int, default=0)
     # 教练启蒙：前 N 轮每场都由标准陪练（打法写死的教练）控制一方，另一方跟着学会接近、出拳，之后再互相对练
     ap.add_argument("--coach-iters", type=int, default=0)
+    # 教练陪练：启蒙期之后，仍有这个比例的场次由陪练教练控制一方（真实拳手天天和陪练对打）
+    ap.add_argument("--coach-frac", type=float, default=0.0)
     ap.add_argument("--floor-frac", type=float, default=0.0)
     ap.add_argument("--floor-lo", type=float, default=0.2)
     ap.add_argument("--floor-hi", type=float, default=0.6)
@@ -140,7 +142,7 @@ def main():
             append(run_dir, "versions.jsonl", rec)
         evaluate(run_dir, bodies, [p[-1] for p in pool], bot, ver, it, total_ticks, args.eval_n, box, skills)
         if box and args.record:
-            record_growth(run_dir, bodies, [p[-1] for p in pool], ver, it, total_ticks, fights_done[0], skills, args.record)
+            record_growth(run_dir, bodies, [p[-1] for p in pool], ver, it + it_off, total_ticks, fights_done[0], skills, args.record)
 
     def assign(mask):
         idx = np.flatnonzero(mask)
@@ -150,6 +152,12 @@ def main():
         if coach_phase[0]:              # 启蒙期：一方是教练
             ctrl[idx, rng.integers(0, 2, idx.size)] = -2
             return
+        if args.coach_frac > 0:         # 之后：一部分场次继续跟陪练教练打
+            cs = idx[rng.random(idx.size) < args.coach_frac]
+            ctrl[cs, rng.integers(0, 2, cs.size)] = -2
+            idx = np.setdiff1d(idx, cs)
+            if not idx.size:
+                return
         if not pool[0]:
             return
         u = rng.random(idx.size)
@@ -167,6 +175,20 @@ def main():
     floor = np.zeros((N, 2))
     fights_done = [0]                      # 正在学的版本打完了多少场（两边都是当前版本的才算）
     firsts = [set(), set()]
+    it_off = 0                             # 接着旧档练时，轮数接着上一段往下数
+    if args.init and args.record:
+        src_dir = os.path.join("runs", args.init.partition(":")[0])
+        mpath = os.path.join(src_dir, "milestones.jsonl")
+        if os.path.exists(mpath):
+            for l in open(mpath, encoding="utf-8"):
+                m = json.loads(l)
+                for k, b in enumerate(bodies):
+                    if m["char"] == b.id:
+                        firsts[k].add(m["event"])
+        gdir = os.path.join(src_dir, "growth")
+        if os.path.isdir(gdir):
+            last = json.load(open(os.path.join(gdir, sorted(os.listdir(gdir))[-1]), encoding="utf-8"))
+            it_off, fights_done[0] = int(last["iter"]), int(last["fights"])
     punches = np.arange(boxing.PUNCH0, boxing.PUNCH0 + 12) if box else None
 
     def new_floors(mask):
@@ -238,7 +260,7 @@ def main():
                     rec[0] += int(info["winner"][i] == side)
                     rec[1] += 1
             if box and args.record:
-                note_milestones(run_dir, bodies, info, done, ctrl == -1, firsts, it, total_ticks, fights_done[0])
+                note_milestones(run_dir, bodies, info, done, ctrl == -1, firsts, it + it_off, total_ticks, fights_done[0])
                 fights_done[0] += int((done & (ctrl == -1).any(1)).sum())
             fin = done & main
             if fin.any():

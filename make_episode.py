@@ -86,18 +86,27 @@ def best_window(frames, secs=9.0):
     return int(np.argmax(sums))
 
 
-def growth_clips(run, milestones, evals):
-    coach = run["cfg"]["args"].get("coach_iters", 0)
+def growth_clips(runs, milestones, coach):
+    """成长片段：正史可能分几段训练档接着练，把各段的成长档案按轮数接起来挑。"""
     vs = lambda it: "（对陪练教练）" if it <= coach else ""
-    gdir = os.path.join(run["dir"], "growth")
-    vers = sorted(int(f[1:5]) for f in os.listdir(gdir) if f.endswith(".json"))
-    if not vers:
+    items = []                                                   # (轮数, 训练档, 版本)
+    for run in runs:
+        gdir = os.path.join(run["dir"], "growth")
+        for f in sorted(os.listdir(gdir)):
+            if f.endswith(".json"):
+                g = json.load(open(os.path.join(gdir, f), encoding="utf-8"))
+                if not items or g["iter"] > items[-1][0]:
+                    items.append((g["iter"], run, int(f[1:5])))
+    if not items:
         return [], 0
-    picks = sorted(set([vers[0], vers[min(len(vers) - 1, 1)], vers[len(vers) // 4], vers[len(vers) // 2], vers[(3 * len(vers)) // 4], vers[-1]]))
+    n = len(items)
+    picks = sorted(set([0, min(n - 1, 1), n // 4, n // 2, (3 * n) // 4, n - 1]))
     clips, prev_iter = [], -1
     total_fights = 0
-    for v in picks:
-        g = json.load(open(os.path.join(gdir, f"v{v:04d}.json"), encoding="utf-8"))
+    for pi in picks:
+        _, run, v = items[pi]
+        evals = run["evals"]
+        g = json.load(open(os.path.join(run["dir"], "growth", f"v{v:04d}.json"), encoding="utf-8"))
         rec = g["replays"][0]
         frames = BL.resimulate(rec)
         start = best_window(frames)
@@ -129,13 +138,19 @@ def growth_clips(run, milestones, evals):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--run", required=True)
+    ap.add_argument("--run", required=True, help="正史训练档，分几段接着练的用逗号隔开，按先后顺序")
     ap.add_argument("--out", default=os.path.join("runs", "episode_pilot.html"))
     args = ap.parse_args()
-    run = load_run(args.run)
+    runs = [load_run(r) for r in args.run.split(",")]
+    run = runs[-1]                                              # 首战用最后一段练出来的最新版本
     skills_of = {c: np.array(run["pick"][c]["skills"]) for c in ORDER}
-    milestones = [json.loads(l) for l in open(os.path.join(run["dir"], "milestones.jsonl"), encoding="utf-8")]
-    clips, total_fights = growth_clips(run, milestones, run["evals"])
+    milestones = []
+    for r in runs:
+        mp = os.path.join(r["dir"], "milestones.jsonl")
+        if os.path.exists(mp):
+            milestones += [json.loads(l) for l in open(mp, encoding="utf-8")]
+    coach = runs[0]["cfg"]["args"].get("coach_iters", 0)
+    clips, total_fights = growth_clips(runs, milestones, coach)
     card = first_fight(run, skills_of)
     card["frames"] = BL.resimulate(card["replay"])
     chars = {c: char_card(c, skills_of[c]) for c in ORDER}
