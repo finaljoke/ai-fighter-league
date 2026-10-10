@@ -24,6 +24,25 @@ def make(gap=1.0, th0=0.0, th1=np.pi, x0=None, y=C, n_rounds=1):
     return s
 
 
+def make_n(n, gap=1.0, n_rounds=1):
+    """n 场同样的摆位，每场的运气种子不同，用来测带运气的规则。"""
+    s = B.Sim(n, (STD, STD), auto_reset=False, n_rounds=n_rounds)
+    s.pos[:, 0] = [C - gap / 2, C]
+    s.pos[:, 1] = [C + gap / 2, C]
+    s.th[:] = [0.0, np.pi]
+    s.hist[:] = s._snapshot()[None]
+    return s
+
+
+def run_n(s, a0, ticks, hold1=B.STAY):
+    """n 场同时按帧给 0 号动作（{帧: 动作}），1 号一直 hold1。"""
+    infos = []
+    for t in range(ticks):
+        act = np.tile([[a0.get(t, B.STAY), hold1]], (s.n, 1))
+        infos.append(s.step(act)[2])
+    return infos
+
+
 def run(s, a0, a1=(), ticks=None, hold1=B.STAY, hold0=B.STAY):
     """a0 / a1：{帧: 动作}。没写的帧用 hold。"""
     a0, a1 = dict(a0), dict(a1)
@@ -254,19 +273,21 @@ check("肝脏拳累积：身体伤满了直接倒地（头部没挨打）", len(
       f"倒地帧 {kd_t[:1]}，身体伤累积打倒")
 
 # ------------------------------------------------------------------ 倒地、KO、TKO、判定
-s = make(1.0)
-s.stun[0, 1] = 99
-inf = run(s, {0: B.CROSS_H}, ticks=70)
-check("晕眩到 100 被击倒；体力够，读秒后站起来但仍带伤",
-      any(i["kd"][0, 1] for i in inf) and s.phase[0, 1] != B.DOWN and not s.over[0] and s.stun[0, 1] > 20,
-      f"状态 {B.PHASE_NAMES[s.phase[0, 1]] or '自由'}，晕眩 {s.stun[0, 1]:.0f}")
+def count_outcome(hp, n=400):
+    s = make_n(n)
+    s.stun[:, 1], s.hp[:, 1] = 99, hp
+    inf = run_n(s, {0: B.CROSS_H}, ticks=70)
+    kd = np.any([i["kd"][:, 1] for i in inf], 0)
+    ko = np.any([i["done"] & (i["method"] == B.M_KO) for i in inf], 0)
+    up = kd & ~s.over & (s.phase[:, 1] != B.DOWN)
+    return kd.mean(), up.mean(), ko.mean(), s.stun[up, 1]
 
-s = make(1.0)
-s.stun[0, 1], s.hp[0, 1] = 99, 12
-inf = run(s, {0: B.CROSS_H}, ticks=70)
-end = [i for i in inf if i["done"][0]]
-check("体力不够：读秒站不起来 = KO", end and end[0]["method"][0] == B.M_KO and end[0]["winner"][0] == 0,
-      f"结果 {B.METHOD_NAMES[end[0]['method'][0]] if end else '没结束'}")
+
+kd_f, up_f, ko_f, up_stun = count_outcome(100)
+check("晕眩到 100 被击倒；体力够，读秒后大多站得起来，但仍带伤（站不站得起来带运气）",
+      kd_f == 1.0 and up_f > 0.6 and up_stun.min() > 20, f"倒地 {kd_f:.0%}，站起来 {up_f:.0%}，站起来后最低晕眩 {up_stun.min():.0f}")
+kd_l, up_l, ko_l, _ = count_outcome(12)
+check("体力不够（累计伤害重）：读秒大多站不起来 = KO", ko_l > 0.5 and ko_l > ko_f + 0.25, f"体力 12 时 KO {ko_l:.0%}，体力满时 {ko_f:.0%}")
 
 s = make(1.0)
 s.stun[0, 1], s.kd_round[0, 1], s.kd_total[0, 1] = 99, 2, 2
@@ -720,12 +741,93 @@ def tko_cause_of(setup, a0, ticks, x0=None):
     return (B.METHOD_NAMES[end[0]["method"][0]], int(end[0]["tko_cause"][0])) if end else None
 
 
-c_hp = tko_cause_of(lambda s: s.hp.__setitem__((0, 1), 0.5), {0: B.CROSS_H}, 10)
+s = make(1.0)
+s.hp[0, 1] = 0.5
+inf = run(s, {0: B.JAB_B}, ticks=10)                       # 打身体：不会一拳击倒，只看体力归零会不会结束比赛
+check("体力归零不结束比赛：体力只是资源池（累计伤害），不判胜负", not any(i["done"][0] for i in inf) and s.hp[0, 1] == 0.0,
+      f"体力 {s.hp[0, 1]:.1f}，{'比赛结束了' if s.over[0] else '比赛继续'}")
 c_un = tko_cause_of(lambda s: s.stun.__setitem__((0, 1), 85), {k * 8: B.JAB_H for k in range(10)}, 85, x0=B.RING - B.BODY_R - 1.0)
 c_kd = tko_cause_of(lambda s: (s.stun.__setitem__((0, 1), 99), s.kd_round.__setitem__((0, 1), 2), s.kd_total.__setitem__((0, 1), 2)),
                     {0: B.CROSS_H}, 10)
-check("统计口径：TKO 记下原因（1 血条归零、2 受伤后连续挨打不还手、3 一回合倒三次）",
-      c_hp == ("TKO", 1) and c_un == ("TKO", 2) and c_kd == ("TKO", 3), f"血条 {c_hp}，连续挨打 {c_un}，倒三次 {c_kd}")
+check("统计口径：TKO 记下原因（2 受伤后连续挨打不还手、3 一回合倒三次）",
+      c_un == ("TKO", 2) and c_kd == ("TKO", 3), f"连续挨打 {c_un}，倒三次 {c_kd}")
+
+
+# ------------------------------------------------------------------ 落点与一拳击倒（v9）
+STRAIGHT, HOOK, UPPER = 0, 1, 2
+one = lambda x: np.array(x)
+imp = lambda typ, zone, unseen=False, dealt=6.0: float(B.impact_of(one(dealt), one(typ), one(zone), one(unseen)))
+check("落点：同样的伤害，勾拳打中下颌的冲击远大于打在额头（打下颌头部转得最猛）",
+      imp(HOOK, B.Z_JAW) > 3 * imp(HOOK, B.Z_FRONT), f"下颌 {imp(HOOK, B.Z_JAW):.2f}，额头 {imp(HOOK, B.Z_FRONT):.2f}")
+check("拳种：同样伤害、同一落点，勾拳 > 直拳 > 上勾拳（上勾拳不比直拳重，假人实测它让头转得最少）",
+      imp(HOOK, B.Z_JAW) > imp(STRAIGHT, B.Z_JAW) > imp(UPPER, B.Z_JAW),
+      f"勾拳 {imp(HOOK, B.Z_JAW):.2f}，直拳 {imp(STRAIGHT, B.Z_JAW):.2f}，上勾拳 {imp(UPPER, B.Z_JAW):.2f}")
+check("没看见的拳冲击更大（加成小）", imp(HOOK, B.Z_JAW) < imp(HOOK, B.Z_JAW, True) < 1.3 * imp(HOOK, B.Z_JAW),
+      f"看见 {imp(HOOK, B.Z_JAW):.2f}，没看见 {imp(HOOK, B.Z_JAW, True):.2f}")
+
+jaw = lambda typ=STRAIGHT, post=B.P_STANDARD, tired=False, skill=0.5, glance=False: float(
+    B.zone_probs(one(typ), one(post), one(tired), one(skill), one(glance))[..., 0])
+check("收下巴（低姿抱架）时直拳多落在额头，打中下颌的少；低手位、累垮手掉下来时下巴更容易挨打",
+      jaw(post=B.P_CROUCH) < jaw() < jaw(post=B.P_LOW) and jaw(tired=True) > jaw(),
+      f"直拳打中下颌：抱架 {jaw(post=B.P_CROUCH):.0%}，标准 {jaw():.0%}，低手位 {jaw(post=B.P_LOW):.0%}，累垮 {jaw(tired=True):.0%}")
+check("越熟练越容易打中下颌；射程边缘擦到的打不到下颌", jaw(skill=1.0) > jaw() and jaw(glance=True) == 0.0,
+      f"熟练度 1.0 {jaw(skill=1.0):.0%}，0.5 {jaw():.0%}，擦到 {jaw(glance=True):.0%}")
+check("勾拳、上勾拳打中下颌的机会比直拳多", jaw(HOOK) > jaw() and jaw(UPPER) > jaw(), f"直拳 {jaw():.0%}，勾拳 {jaw(HOOK):.0%}，上勾拳 {jaw(UPPER):.0%}")
+
+d_counter_hook = B.DMG[B.RHOOK_H - B.PUNCH0] * B.DMG_SCALE * B.COUNTER_DMG
+pk = lambda dealt, typ, zone, unseen, stun=0.0, hp=100.0: float(
+    B.kd_prob(B.impact_of(one(dealt), one(typ), one(zone), one(unseen)), B.kd_threshold(one(stun), one(hp))))
+p_fresh = pk(d_counter_hook, HOOK, B.Z_JAW, True)
+p_cross = pk(B.DMG[B.CROSS_H - B.PUNCH0] * B.DMG_SCALE, STRAIGHT, B.Z_JAW, False)
+p_hurt = pk(d_counter_hook, HOOK, B.Z_JAW, True, stun=60)
+p_low = pk(d_counter_hook, HOOK, B.Z_JAW, True, hp=30)
+p_jab = pk(B.DMG[B.JAB_H - B.PUNCH0] * B.DMG_SCALE, STRAIGHT, B.Z_FRONT, False)
+check("一拳击倒：满状态挨一记反击后手勾拳打中下颌约 25% 倒地；后手直拳打下颌很难打倒；刺拳打额头打不倒",
+      0.15 <= p_fresh <= 0.35 and p_cross < 0.05 and p_jab == 0.0, f"反击勾拳 {p_fresh:.0%}，后手直拳 {p_cross:.1%}，刺拳额头 {p_jab:.0%}")
+check("最近挨了很多打（晕眩）或本场伤得重（体力低），同一拳更容易把人打倒",
+      p_hurt > 0.6 and p_low > p_fresh, f"被打晃 {p_hurt:.0%}，体力 30 {p_low:.0%}，满状态 {p_fresh:.0%}")
+
+s = make_n(2000, gap=1.0)
+inf = run_n(s, {0: B.CROSS_H}, ticks=12)
+zs = np.concatenate([i["zone"][:, 0] for i in inf])
+zs = zs[zs >= 0]
+expect = jaw()
+check("落点按概率抽：2000 场后手直拳打站着的人，打中下颌的比例和设定一致",
+      len(zs) > 1500 and abs(np.mean(zs == B.Z_JAW) - expect) < 0.04, f"实际 {np.mean(zs == B.Z_JAW):.1%}，设定 {expect:.0%}（{len(zs)} 拳）")
+
+import boxing_league as BL
+from boxing_bots import BoxingSparring
+bt = BL.run_matches((STD, STD), (BoxingSparring(), BoxingSparring()), ("T1", "T2"), 6, seed=31, n_rounds=1)
+same = []
+for i in range(bt.n):
+    rec = BL.replay_record(bt, i, [{"name": "T1"}, {"name": "T2"}])
+    try:
+        BL.resimulate(rec)
+        same.append(True)
+    except AssertionError:
+        same.append(False)
+check("运气可重放：每场的运气种子存在回放里，重放结果和原来一模一样", all(same), f"{sum(same)}/{len(same)} 场一致")
+
+
+def luck_run(init):
+    s = B.Sim(len(init), (STD, STD), auto_reset=False, n_rounds=1)
+    s.reset(np.ones(len(init), bool), init=init)
+    s.pos[:, 0], s.pos[:, 1], s.th[:] = [C - 0.35, C], [C + 0.35, C], [0.0, np.pi]
+    s.stun[:, 1] = 70                                  # 已经被打晃，后手勾拳有机会一拳打倒
+    s.hist[:] = s._snapshot()[None]
+    inf = run_n(s, {t: B.RHOOK_H for t in range(0, 60, 12)}, ticks=70)
+    return np.array([i["zone"][:, 0] for i in inf]), np.array([i["kd"][:, 1] for i in inf])
+
+
+base_init = make_n(200).init.copy()
+z1, k1 = luck_run(base_init)
+z2, k2 = luck_run(base_init.copy())
+other = base_init.copy()
+other[:, 5] += 1
+z3, k3 = luck_run(other)
+check("运气只由这场的种子、第几帧、哪一方决定：同一个种子落点和击倒完全一样，换个种子就不一样",
+      (z1 == z2).all() and (k1 == k2).all() and (z1 != z3).any() and k1.sum() > 0,
+      f"同种子一致 {bool((z1 == z2).all() and (k1 == k2).all())}，换种子不同的落点 {(z1 != z3).sum()} 处，击倒 {k1.sum()} 次")
 
 
 if __name__ == "__main__":

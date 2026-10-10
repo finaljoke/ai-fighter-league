@@ -26,7 +26,7 @@ TARGETS = [
     ("tired_share", "累垮时间占比（体能 < 25%）", 0.0, 0.20, "design", "常识约束：真实拳手不会整场空着油箱打"),
     ("posture_max", "最常用架势的时间占比（两人都算）", 0.0, 0.60, "design", "没有一种架势被所有角色都用超过六成时间"),
     ("hp_tko_share", "血条归零判 TKO 的比例", 0.0, 0.0, "design", "原则：血条只是资源池，不判胜负"),
-    ("stoppage", "提前结束比例（KO+TKO）", None, None, "record", "职业 47%（KO 15%、TKO 32%，BoxRec 2014~2024）；奥运只有几个百分点。待定"),
+    ("stoppage", "提前结束比例（KO+TKO）", None, None, "record", "用户定：偏高是好事，不设上限（参照：职业 47%，KO 15%、TKO 32%）"),
     ("kd_per_fight", "每场击倒次数", None, None, "record", "没有可靠数据，不设硬指标"),
     ("last_round_stop", "提前结束里发生在最后一回合的比例", None, None, "record", "真实比赛偏早段（Hutchison 2014；职业平均第 2.59 回合）"),
 ]
