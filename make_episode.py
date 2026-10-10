@@ -87,6 +87,8 @@ def best_window(frames, secs=9.0):
 
 
 def growth_clips(run, milestones, evals):
+    coach = run["cfg"]["args"].get("coach_iters", 0)
+    vs = lambda it: "（对陪练教练）" if it <= coach else ""
     gdir = os.path.join(run["dir"], "growth")
     vers = sorted(int(f[1:5]) for f in os.listdir(gdir) if f.endswith(".json"))
     if not vers:
@@ -107,8 +109,8 @@ def growth_clips(run, milestones, evals):
             voice = "刚出生的他们，还不知道拳该往哪里打。"
         elif new:
             m = (big or new)[-1]
-            cap = {"text": f"{m['name'].split('·')[0]} {m['event']}", "sub": f"训练第 {m['iter']} 轮 · 第 {m['fights']} 场左右", "big": bool(big)}
-            voice = f"训练第{m['iter']}轮，{m['name'].split('·')[0]}{m['event']}。"
+            cap = {"text": f"{m['name'].split('·')[0]} {m['event']}{vs(m['iter'])}", "sub": f"训练第 {m['iter']} 轮 · 第 {m['fights']} 场左右", "big": bool(big)}
+            voice = f"训练第{m['iter']}轮，{m['name'].split('·')[0]}{m['event']}{'，对手是陪练教练' if m['iter'] <= coach else ''}。"
         else:
             cap = None
             voice = f"训练第{g['iter']}轮。"
@@ -119,7 +121,7 @@ def growth_clips(run, milestones, evals):
             sub += f" · 每 10 秒出拳 {rate[0]:.0f} / {rate[1]:.0f}"
         clips.append({"version": v, "iter": g["iter"], "fights": g["fights"], "frames": frames, "bodies": rec["bodies"],
                       "from": start, "dur": 9.0, "speed": 1, "when": f"训练第 {g['iter']} 轮" if g["iter"] else "第 0 轮 · 出生",
-                      "when_sub": sub, "caption": cap, "voice": voice})
+                      "when_sub": sub + ("　· 启蒙期：跟陪练教练学" if 0 < g["iter"] <= coach else ""), "caption": cap, "voice": voice})
         prev_iter = g["iter"]
         total_fights = g["fights"]
     return clips, total_fights
