@@ -127,17 +127,36 @@ check("称重状态：精神足的好；累的、带伤的、练过头的差",
       form() > form(fatigue=60) and form() > form(injury=0.5) and form(camp=[40] * 20) > form(camp=[85] * 20),
       f"精神足 {form():+.2f}，累 {form(fatigue=60):+.2f}，带伤 {form(injury=0.5):+.2f}，练过头 {form(camp=[85] * 20):+.2f}")
 
-# ------------------------------------------------------------------ 体检、禁赛
+# ------------------------------------------------------------------ 体检；赛博肉体没有禁赛
 f = fresh()
 m = C.medical(f, hp_lost=60, knockdowns=2, stopped=True, ko=True)
-check("赛后体检：伤势 = 掉血/150 + 倒地×0.15 + 被终止 0.3；被 KO 禁赛 30 天、下巴变脆",
-      abs(m["severity"] - min(1, 60 / 150 + 0.3 + 0.3)) < 1e-6 and f.suspension == 30 and f.pts["抗击打"] < f.pts0["抗击打"],
-      f"伤势 {m['severity']}，恢复 {m['recovery_days']} 天，禁赛 {f.suspension} 天，抗击打 {f.pts0['抗击打']:.2f}→{f.pts['抗击打']:.2f}")
+check("赛后体检：伤势 = 掉血/150 + 倒地×0.15 + 被终止 0.3；被 KO 下巴变脆",
+      abs(m["severity"] - min(1, 60 / 150 + 0.3 + 0.3)) < 1e-6 and f.pts["抗击打"] < f.pts0["抗击打"],
+      f"伤势 {m['severity']}，恢复 {m['recovery_days']} 天，抗击打 {f.pts0['抗击打']:.2f}→{f.pts['抗击打']:.2f}")
 e = C.do_day(f, "对练·教练")
-check("禁赛期不能实战对练（自动改成别的项目）", e["activity"] != "对练·教练", f"改成了 {e['activity']}")
-f2 = fresh()
-C.medical(f2, hp_lost=40, knockdowns=0, stopped=True, ko=False)
-check("被 TKO 禁赛 21 天", f2.suspension == 21, f"禁赛 {f2.suspension} 天")
+check("赛博肉体没有禁赛：被 KO 第二天照样能对练，只是带伤练效果打折",
+      e["activity"] == "对练·教练" and e["effect"] < 0.9, f"项目 {e['activity']}，效果 {e['effect']:.0%}")
+hurt, ok_ = fresh(), fresh()
+hurt.fatigue = ok_.fatigue = 50.0
+C.add_injury(hurt, 0.5, 10)
+check("带伤练更容易再伤：同样的对练，伤势 0.5 时受伤风险是没伤时的 2 倍",
+      abs(C.injury_risk(hurt, "对练·邀请拳手") / C.injury_risk(ok_, "对练·邀请拳手") - 2.0) < 1e-6,
+      f"没伤 {C.injury_risk(ok_, '对练·邀请拳手'):.3f}，带伤 {C.injury_risk(hurt, '对练·邀请拳手'):.3f}")
+
+# ------------------------------------------------------------------ 高强度
+lo, hi = fresh(), fresh()
+e_lo, e_hi = C.train(lo, "器械力量"), C.train(hi, "器械力量", high=True)
+gain = lambda x: x.pend_attr["力量"]
+check("高强度：收益 ×1.5、疲劳 ×2 再加 20、受伤风险 ×3（一天仍然只做一件事）",
+      abs(gain(hi) / gain(lo) - 1.5) < 1e-6 and abs(hi.fatigue - (2 * lo.fatigue + C.HIGH_LOAD_ADD)) < 1e-6
+      and abs(C.injury_risk(fresh(), "器械力量", True) / C.injury_risk(fresh(), "器械力量") - 3.0) < 1e-6 and e_hi["high"],
+      f"力量收益 {gain(lo):.3f}→{gain(hi):.3f}，疲劳 {lo.fatigue:.0f}→{hi.fatigue:.0f}")
+check("高强度只有训练和对练能选：休息、看录像、战术会议选了也按常规",
+      not C.train(fresh(), "休息", high=True)["high"] and not C.train(fresh(), "看录像", high=True)["high"])
+check("本来没风险的项目（跑步）练高强度也会有一点受伤风险", C.injury_risk(fresh(), "跑步") == 0 and C.injury_risk(fresh(), "跑步", True) > 0)
+bold, timid = fresh(STOCKY), fresh(LANKY)                  # B 胆量、斗志 0.7，A 只有 0.4
+edge = lambda f: C.score_activity(f, "打沙袋", None, 20, high=True) - C.score_activity(f, "打沙袋", None, 20)
+check("胆大、好斗的更爱高强度（团队排程时把受伤和疲劳看得轻）", edge(bold) > edge(timid), f"高强度多出的分：胆大 {edge(bold):+.2f}，胆小 {edge(timid):+.2f}")
 
 # ------------------------------------------------------------------ 对练真的跑强化学习
 f = fresh()
@@ -148,7 +167,6 @@ check("对练是真的训练：出招网络被更新", changed and e["note"]["it
 
 # ------------------------------------------------------------------ 团队取舍
 f = fresh()
-f.suspension = 99
 f.knowledge["B"] = 1.0
 opp = fresh(STOCKY)
 only_cardio = {a: 0.0 for a in C.TRAINABLE} | {"体能": 1.0}

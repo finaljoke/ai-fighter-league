@@ -230,8 +230,8 @@ function info(d) {
       const e = d.row[id], n = e.note || {};
       const extra = [n.techs ? '练的招式：' + n.techs.join('、') : '', n.target ? '研究对象：' + n.target : '', n.partner ? '对练对象：' + n.partner : '', n.injured ? '<b style="color:var(--crit)">训练中受伤，伤势 ' + n.injured + '</b>' : ''].filter(Boolean).join(' · ');
       return `<div class="card"><h3><span class="who" style="background:${COLOR[id]}"></span>${esc(NAME[id])} · 第 ${e.day} 天</h3>
-        <div class="act">${esc(e.activity)}</div><div class="desc">${esc(ACT_DESC[e.activity] || '')}${extra ? '<br>' + extra : ''}</div>
-        <div class="kv">效果 <b>${(e.effect * 100).toFixed(0)}%</b> · 疲劳 <b>${e.before.fatigue} → ${e.after.fatigue}</b> · 伤势 <b>${e.after.injury.toFixed(2)}</b>${e.after.suspension ? ' · 禁赛还剩 ' + e.after.suspension + ' 天' : ''}</div>
+        <div class="act">${esc(e.activity)}${e.high ? '<b style="color:var(--crit)">（高强度）</b>' : ''}</div><div class="desc">${esc(ACT_DESC[e.activity] || '')}${extra ? '<br>' + extra : ''}</div>
+        <div class="kv">效果 <b>${(e.effect * 100).toFixed(0)}%</b> · 疲劳 <b>${e.before.fatigue} → ${e.after.fatigue}</b> · 伤势 <b>${e.after.injury.toFixed(2)}</b></div>
         ${e.night ? `<div class="kv">夜里：睡 <b>${e.night.sleep} 小时</b>（睡眠质量 ${e.night.sleep_q}）· 饮食 <b>${esc(e.night.diet)}</b> · 体重 ${e.night.mass} 公斤 · 还没兑现的收益 ${e.after.pending}</div>` : ''}
         <div class="delta">${delta(e.before, e.after)}</div></div>`;
     }).join('');
@@ -243,7 +243,7 @@ function info(d) {
       return `<div class="card"><h3><span class="who" style="background:${COLOR[id]}"></span>${esc(NAME[id])} · ${esc(fg.title)}（第 ${fg.day} 天）</h3>
         <div class="kv">称重 <b>${wi.mass} 公斤</b>${wi.cut && wi.cut.over > 0 ? (wi.cut.failed ? ' · <b style="color:var(--crit)">称重失败</b>' : ` · 超重 ${wi.cut.over} 公斤，临时脱水掉秤`) : ''} · 状态期望 <b>${wi.form_mean >= 0 ? '+' : ''}${wi.form_mean}</b> · 疲劳 ${wi.fatigue} · 伤势 ${wi.injury}</div>
         <div class="kv">开场战术 <b>${esc(plan(s))}</b> · 对对手的了解度 <b>${fg.knowledge[s]}</b></div>
-        <div class="kv">赛后体检：掉血 ${md.hp_lost}、倒地 ${md.knockdowns} 次、伤势 <b>${md.severity}</b>、恢复 <b>${md.recovery_days} 天</b>${md.suspension ? '、<b style="color:var(--crit)">禁赛 ' + md.suspension + ' 天</b>' : ''}</div></div>`;
+        <div class="kv">赛后体检：掉血 ${md.hp_lost}、倒地 ${md.knockdowns} 次、伤势 <b>${md.severity}</b>、恢复 <b>${md.recovery_days} 天</b></div></div>`;
     }).join('') + `<div class="card" style="grid-column:1/-1"><div class="act">${r.winner ? esc(NAME[r.winner]) + ' ' + esc(r.method) + ' 获胜' : '平局'}（${r.seconds} 秒）</div>
       <div class="kv">${r.method === '点数判定' || r.method === '平局' ? '记分卡：' + r.judges.map((c2, n) => `裁判${n + 1} ${c2[0]}-${c2[1]}`).join('，') : ''}</div></div>`;
   }

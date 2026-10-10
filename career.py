@@ -23,7 +23,13 @@ INJURY_TRAIN_DISCOUNT = 0.6     # 带伤训练：效果 ×(1 − 0.6 × 当前�
 INJURY_TRAIN_DELAY = 0.5        # 带伤训练一天，恢复期多拖 0.5 天
 ATTR_HEADROOM = 2.0             # 潜力上限 = 天赋 + 2 分（且 ≤ 10）
 DETRAIN_DAYS, DETRAIN_RATE = 21, 0.03   # 三周不练有氧，体能每天掉 0.03 分
-KO_SUSPENSION, TKO_SUSPENSION = 30, 21
+# AI 格斗家是赛博肉体，只为武道而生：没有禁赛，伤了也能练，风险自己担（带伤练效果打折、更容易再伤、恢复拖长）
+INJURY_RISK = 2.0               # 带伤训练的受伤风险 ×(1 + 2 × 当前伤势)
+# 高强度：每个训练、对练项目都能选。收益 ×1.5、疲劳 ×2 再加 20、受伤风险 ×3（本来没风险的项目也有一点）。一天仍然只做一件事
+HIGH_EFFECT, HIGH_LOAD, HIGH_RISK, HIGH_MIN_RISK = 1.5, 2.0, 3.0, 0.01
+HIGH_LOAD_ADD = 20.0            # 额外的固定疲劳：轻项目上高强度也不是白捡
+HIGH_COURAGE = 3.0              # 高强度多出来的那一截收益在团队眼里值多少：× 3 × 胆量（胆大的觉得值，胆小的觉得不值）
+RISK_COST = 3.0                 # 团队排程时，受一次伤大约值多少分（胆大的看得轻）
 KO_CHIN_LOSS = 0.3              # 被 KO 一次，抗击打掉 0.3 分（"下巴被打穿"）
 SPAR_ITERS = 12                 # 一天对练跑多少轮强化学习
 SPAR_ENVS, SPAR_T = 96, 128
@@ -98,7 +104,6 @@ class Fighter:
         self.vf = None
         self.fatigue = 0.0
         self.injury, self.injury_days, self.injury_left = 0.0, 0.0, 0.0
-        self.suspension = 0
         self.knowledge = {}
         self.strategy_days = 0
         self.last_aerobic_day = 0
@@ -155,34 +160,47 @@ class Fighter:
 
     def state(self):
         return {"day": self.day, "fatigue": round(self.fatigue, 1), "injury": round(self.injury_now(), 3),
-                "injury_left": round(self.injury_left, 1), "suspension": self.suspension,
+                "injury_left": round(self.injury_left, 1),
                 "pts": {k: round(v, 3) for k, v in self.pts.items()}, "skills": self.skills.round(4).tolist(),
                 "knowledge": {k: round(v, 3) for k, v in self.knowledge.items()}, "strategy_days": self.strategy_days,
                 "mass": round(self.mass, 2), "pending": round(sum(self.pend_attr.values()) + float(self.pend_skill.sum()), 4)}
 
 
 # ------------------------------------------------------------------ 一天 = 白天训练 + 晚上睡觉吃饭
-def do_day(f, activity, techs=None, target=None, partner=None, seed=0, days_left=99, sleep=None, diet=None):
+def do_day(f, activity, techs=None, target=None, partner=None, seed=0, days_left=99, sleep=None, diet=None, high=False):
     """让 f 过一天：白天做 activity，晚上睡觉吃饭把收益兑现。返回这一天的日志。
     techs：选的招式；target：看录像研究的对手；partner：对练对象 (body, 出招对象, 熟练度, 名字)；
-    sleep / diet：睡多少小时、怎么吃，不给就由团队按情况定。"""
-    entry = train(f, activity, techs=techs, target=target, partner=partner, seed=seed)
+    sleep / diet：睡多少小时、怎么吃，不给就由团队按情况定；high：高强度。"""
+    entry = train(f, activity, techs=techs, target=target, partner=partner, seed=seed, high=high)
     entry["night"] = night(f, days_left=days_left, sleep=sleep, diet=diet)
     entry["after"] = f.state()
     return entry
 
 
-def train(f, activity, techs=None, target=None, partner=None, seed=0):
-    """白天：做一个训练项目。收益先记成"待兑现"，晚上才变成真实属性。"""
+def can_go_high(activity):
+    return ACTIVITIES[activity]["kind"] in ("train", "spar")
+
+
+def injury_risk(f, activity, high=False):
+    """今天做这个项目受伤的概率：项目本身的风险 × 疲劳 × 带伤（越伤越容易再伤）× 高强度。"""
+    spec = ACTIVITIES[activity]
+    base = spec.get("risk", 0.0)
+    if high:
+        base = max(base, HIGH_MIN_RISK) * HIGH_RISK
+    return base * (0.3 + (f.fatigue / 100.0) ** 2 * 2) * (1 + INJURY_RISK * f.injury_now())
+
+
+def train(f, activity, techs=None, target=None, partner=None, seed=0, high=False):
+    """白天：做一个训练项目。收益先记成"待兑现"，晚上才变成真实属性。high：高强度（只有训练、对练项目能选）。"""
     if activity not in ACTIVITIES:
         raise ValueError(f"没有这个训练项目：{activity}")
-    if activity.startswith("对练") and f.suspension > 0:
-        activity = "看录像" if target is not None else "实战复盘"   # 禁赛期不能实战对练
+    high = bool(high) and can_go_high(activity)
     spec = ACTIVITIES[activity]
-    kind, load = spec["kind"], spec["load"]
+    kind, load = spec["kind"], spec["load"] * (HIGH_LOAD if high else 1) + (HIGH_LOAD_ADD if high else 0)
     before = f.state()
-    eff = f.effect()
-    note = {}
+    risk = injury_risk(f, activity, high)            # 按练之前的疲劳和伤势算
+    eff = f.effect() * (HIGH_EFFECT if high else 1)
+    note = {"intensity": "高强度"} if high else {}
 
     for name, rate in spec.get("attrs", {}).items():
         f.pend_attr[name] += rate * eff * f.room(name)
@@ -215,7 +233,6 @@ def train(f, activity, techs=None, target=None, partner=None, seed=0):
             k0 = f.knowledge.get(target.id, 0.0)
             f.pend_know[target.id] = f.pend_know.get(target.id, 0.0) + 0.15 * (1 - k0)
 
-    risk = spec.get("risk", 0.0) * (0.3 + (f.fatigue / 100.0) ** 2 * 2)
     if risk and f.rng.random() < risk:
         sev = float(f.rng.uniform(0.1, 0.3))
         add_injury(f, sev, 2 + 20 * sev)
@@ -227,11 +244,10 @@ def train(f, activity, techs=None, target=None, partner=None, seed=0):
     if f.injury_left > 0 and not f.rested and load > 0:
         f.injury_left += INJURY_TRAIN_DELAY             # 带伤练，恢复期被拉长
         f.injury_days += INJURY_TRAIN_DELAY
-    f.suspension = max(0, f.suspension - 1)
     if f.day - f.last_aerobic_day > DETRAIN_DAYS:
         f.pts["体能"] = max(0.0, f.pts["体能"] - DETRAIN_RATE)
     f.day += 1
-    entry = {"day": f.day, "activity": activity, "effect": round(eff, 3), "note": note, "before": before}
+    entry = {"day": f.day, "activity": activity, "effect": round(eff, 3), "high": high, "note": note, "before": before}
     f.log.append(entry)
     return entry
 
@@ -449,17 +465,15 @@ def fight_night(fa, fb, seed=0, title=""):
 
 
 def medical(f, hp_lost, knockdowns, stopped, ko):
-    """赛后体检：伤势、恢复天数、禁赛，被 KO 的下巴变脆。"""
+    """赛后体检：伤势、恢复天数，被 KO 的下巴变脆。没有禁赛：赛博肉体，伤了也能练，风险自己担。"""
     sev = min(1.0, hp_lost / 150.0 + 0.15 * knockdowns + (0.3 if stopped else 0.0))
     days = 2 + 20 * sev
     if sev > 0:
         add_injury(f, sev, days)
-    susp = KO_SUSPENSION if (stopped and ko) else (TKO_SUSPENSION if stopped else 0)
-    f.suspension = max(f.suspension, susp)
     if stopped and ko:
         f.pts["抗击打"] = max(0.0, f.pts["抗击打"] - KO_CHIN_LOSS)
     return {"id": f.id, "hp_lost": round(hp_lost, 1), "knockdowns": knockdowns, "severity": round(sev, 3),
-            "recovery_days": round(days, 1), "suspension": susp}
+            "recovery_days": round(days, 1)}
 
 
 # ------------------------------------------------------------------ 团队排程：每天给候选项目打分，取舍
@@ -469,13 +483,15 @@ def attr_need(f):
     return {a: prio.get(a, 0.5) * f.room(a) for a in TRAINABLE}
 
 
-def score_activity(f, act, opp, days_left, need=None, partner_available=True):
-    """一个项目今天值多少分。分数 = 各项需要 × 增量之和（+ 目标进度），减去疲劳代价。"""
+def score_activity(f, act, opp, days_left, need=None, partner_available=True, high=False):
+    """一个项目今天值多少分。分数 = 各项需要 × 增量之和（+ 目标进度），减去疲劳代价和受伤风险。high：高强度版本。"""
     spec = ACTIVITIES[act]
     need = need if need is not None else attr_need(f)
     t = SC.temperament(f.base)
-    drive, iq = t[2], f.pts["拳商"] / 10.0
-    eff = f.effect()
+    courage, drive, iq = t[0], t[2], f.pts["拳商"] / 10.0
+    high = bool(high) and can_go_high(act)
+    # 高强度多出来的那一截收益值不值，看胆量：胆大的觉得值，胆小的觉得不值
+    eff = f.effect() * ((1 + (HIGH_EFFECT - 1) * HIGH_COURAGE * courage) if high else 1)
     v = sum(need.get(a, 0) * r for a, r in spec.get("attrs", {}).items()) * 10 * eff
     v += sum(0.5 * r * 10 for r in spec.get("skills", {}).values()) * eff
     if spec.get("tech"):
@@ -487,7 +503,7 @@ def score_activity(f, act, opp, days_left, need=None, partner_available=True):
     if spec["kind"] == "strategy":
         v = 3.0 if (days_left <= 1 + strat_target and f.strategy_days < strat_target) else -1.0
     if spec["kind"] == "spar":
-        if f.suspension > 0 or (act == "对练·邀请拳手" and not partner_available):
+        if act == "对练·邀请拳手" and not partner_available:
             return -9.0
         v += (0.35 + 0.45 * drive) * eff                  # 对练是让打法进步的主要途径，好斗的更爱
         recent_spar = sum(1 for e in f.log[-7:] if e["activity"].startswith("对练"))
@@ -498,18 +514,20 @@ def score_activity(f, act, opp, days_left, need=None, partner_available=True):
             v += 5.0                                      # 赛前一天减量
     if spec["kind"] not in ("rest", "strategy", "spar"):
         v -= VARIETY * sum(1 for e in f.log[-7:] if e["activity"] == act)      # 同一个项目连着练，边际收益下降
-    cost = max(0, spec["load"]) / 100.0 * (0.4 + f.fatigue / 100.0) * (1.4 - 0.6 * drive)
-    cost += max(0, spec["load"]) / 100.0 * 1.5 * f.injury_now()
+    load = max(0, spec["load"]) * (HIGH_LOAD if high else 1) + (HIGH_LOAD_ADD if high else 0)
+    cost = load / 100.0 * (0.4 + f.fatigue / 100.0) * (1.4 - 0.6 * drive)
+    cost += load / 100.0 * 1.5 * f.injury_now()
+    cost += RISK_COST * injury_risk(f, act, high) * (1.3 - courage)     # 胆大的不怕受伤
     return v - cost
 
 
 def coach_choose(f, opp, days_left, partner_available=True, need=None, noise=0.08):
-    """团队今天的选择：给所有项目打分，挑最高的（带一点随机）。返回 (项目, 参数)。"""
-    acts = list(ACTIVITIES)
-    scores = np.array([score_activity(f, a, opp, days_left, need, partner_available) for a in acts])
+    """团队今天的选择：给所有项目（训练、对练还有高强度版本）打分，挑最高的（带一点随机）。返回 (项目, 参数)。"""
+    cands = [(a, False) for a in ACTIVITIES] + [(a, True) for a in ACTIVITIES if can_go_high(a)]
+    scores = np.array([score_activity(f, a, opp, days_left, need, partner_available, high=h) for a, h in cands])
     scores = scores + f.rng.normal(0, noise, len(scores))
-    act = acts[int(np.argmax(scores))]
-    kw = {}
+    act, high = cands[int(np.argmax(scores))]
+    kw = {"high": True} if high else {}
     if ACTIVITIES[act].get("tech"):
         top = list(np.argsort(-f.skills[:12])[:2])
         weak = list(np.argsort(f.skills[:12] - f.talent[:12])[:1])

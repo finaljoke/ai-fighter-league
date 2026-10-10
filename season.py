@@ -102,7 +102,7 @@ def main():
         card["day"] = day
         res = card["result"]
         print(f"  结果：{res['winner'] or '平局'} {res['method']}（{res['seconds']} 秒）  体检 "
-              + "，".join(f"{m['id']} 伤势 {m['severity']} 恢复 {m['recovery_days']} 天 禁赛 {m['suspension']}" for m in card["medical"]),
+              + "，".join(f"{m['id']} 伤势 {m['severity']} 恢复 {m['recovery_days']} 天" for m in card["medical"]),
               flush=True)
         fights.append(card)
 
