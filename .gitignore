@@ -6,3 +6,4 @@ __pycache__/
 tools/node_modules/
 *.mp4
 tools/voice_cache/
+characters/

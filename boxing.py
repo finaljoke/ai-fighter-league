@@ -7,7 +7,7 @@
 """
 import numpy as np
 
-SIM_VERSION = "box2d-v12"
+SIM_VERSION = "box2d-v13"
 
 DT = 0.05
 RING = 6.1
@@ -22,8 +22,13 @@ STUN_DECAY = 8.0 * DT
 BODY_DECAY = 2.0 * DT
 STAM_BASE, STAM_REGEN = 100.0, 2.5     # 体能回复：持续出拳量被体能卡住（高手每分钟三十来拳）
 WALK_COST = 0.04                        # 走动每帧耗的体能：外围型来回走也会累
-TIRED = 0.25                            # 体能低于 25%：手会掉（举架效果 ×0.6、没有自然站姿保护）、反应慢 1 帧
-TIRED_GUARD = 0.6
+TIRED = 0.25                            # 只用于统计"累垮时间占比"；疲劳的影响见 fatigue()，是逐渐变化的
+# 疲劳程度到 1（体能见底）时的影响，中间按 fatigue() 的曲线逐渐加上去（调研：先平后陡，没有突然全面失效）
+FAT_GUARD, FAT_HIGH_GUARD = 0.5, 0.4    # 默认护架最低保留一半；专门举架最低 ×0.6
+FAT_POWER_JAB, FAT_POWER = 0.03, 0.10   # 出拳力：刺拳几乎不掉，后手和勾拳降得多
+FAT_SCATTER = 0.6                       # 动作散布大六成：擦到的区间变宽
+FAT_WALK = 0.15                         # 步速
+FAT_SLOW = 0.5                          # 疲劳程度过了这个值：反应、起手各慢 1 帧（约 −10%）
 TURN_RATE = np.radians(300)
 ANG_STRAIGHT, ANG_HOOK, ANG_GUARD = np.radians(30), np.radians(45), np.radians(25)
 ROUND_TICKS = 1200          # 一回合 60 秒
@@ -255,10 +260,16 @@ def ray_to_rope(pos, ang):
     return np.maximum(0.0, np.minimum(tx, ty))
 
 
+def fatigue(sf):
+    """疲劳程度 0~1：体能五成以上是 0，五成到两成缓升到 0.4，两成以下加速升到 1。"""
+    sf = np.clip(sf, 0.0, 1.0)
+    return np.where(sf >= 0.5, 0.0, np.where(sf >= 0.2, 0.4 * (0.5 - sf) / 0.3, 0.4 + 0.6 * (0.2 - sf) / 0.2))
+
+
 def zone_probs(typ, def_posture, def_tired, skill, glance):
     """一记干净打中头部的拳落在 下颌 / 头侧 / 额头面门 的概率，形状 (..., 3)。"""
     base = ZONE_BASE[typ]
-    jaw = base[..., 0] * JAW_POSTURE[def_posture] * np.where(def_tired, JAW_TIRED, 1.0) * (1.0 + AIM_SKILL * (skill - 0.5))
+    jaw = base[..., 0] * JAW_POSTURE[def_posture] * (1.0 + (JAW_TIRED - 1.0) * def_tired) * (1.0 + AIM_SKILL * (skill - 0.5))
     jaw = np.where(glance, 0.0, np.clip(jaw, 0.0, 0.95))          # 射程边缘擦到的打不到下颌
     side = base[..., 1] * (1.0 - jaw) / (base[..., 1] + base[..., 2])
     return np.stack([jaw, side, 1.0 - jaw - side], -1)
@@ -267,7 +278,7 @@ def zone_probs(typ, def_posture, def_tired, skill, glance):
 def body_zone_probs(typ, right_hand, def_southpaw, def_tired, skill, glance):
     """一记干净打中身体的拳落在 肝区 / 心窝 / 其他 的概率，形状 (..., 3)。right_hand：这一拳是不是右手打的。"""
     base = BODY_ZONE_BASE[typ, np.asarray(right_hand).astype(np.int64)]
-    liver = (base[..., 0] * np.where(def_southpaw & (typ == 0), LIVER_SOUTHPAW, 1.0) * np.where(def_tired, LIVER_TIRED, 1.0)
+    liver = (base[..., 0] * np.where(def_southpaw & (typ == 0), LIVER_SOUTHPAW, 1.0) * (1.0 + (LIVER_TIRED - 1.0) * def_tired)
              * (1.0 + AIM_SKILL * (skill - 0.5)))
     liver = np.where(glance, 0.0, np.clip(liver, 0.0, 0.95))
     plexus = base[..., 1] * (1.0 - liver) / (base[..., 1] + base[..., 2])
@@ -496,7 +507,7 @@ class Sim:
         """当前的反应延迟：心态差会反应变慢；低手位看得清；对手的拳露馅（熟练度低、上头）就早一帧看到。"""
         tele = self.telegraph()
         r = (self.react[None, :] + (self.comp < COMP_SLOW1) + (self.comp < COMP_SLOW2)
-             + (self.stam < TIRED * self.stam_max[None, :])
+             + (fatigue(self.stam / self.stam_max[None, :]) >= FAT_SLOW)
              - POSTURE_FX[self.posture, FX_REACT].astype(int) - tele[:, ::-1] * (self.mind[None, :, 0] >= TELL_OBS))
         return np.maximum(1, r)
 
@@ -644,7 +655,8 @@ class Sim:
         off_dmg = np.where(off_st, 1.0 - OFF_STANCE_DMG + OFF_STANCE_DMG * sw, 1.0)
         glance = dist[:, None] + head_add > reach_lim - (self.glance_tab[p, side] * np.where(tilt > 0, TILT_GLANCE, 1.0)
                                                           * RNG[p] * self.reach[None, :]
-                                                          * np.where(off_st, 1.0 + OFF_STANCE_GLANCE * (1.0 - sw), 1.0))
+                                                          * np.where(off_st, 1.0 + OFF_STANCE_GLANCE * (1.0 - sw), 1.0)
+                                                          * (1.0 + FAT_SCATTER * fatigue(stam / self.stam_max)))
         dip_t = np.isin(ph_t, (STARTUP, RECOVERY)) & (mv_t < 12) & (TGT[np.minimum(mv_t, 11)] == 1)   # 对手正在出身体拳
         live = fire & ang_ok & (ph_t != DOWN) & (ph_t != CLINCHED) & (ph != CLINCHED)
         reach_ok = live & in_rng
@@ -652,12 +664,12 @@ class Sim:
         gtype = np.where((ph_t == FREE) | (ph_t == BLOCKSTUN), guard_prev[:, ::-1], 0)
         gm = GUARD_MULT[gtype, cls]
         gs = self.guard_scale[::-1]                                   # 防守方的格挡熟练度
-        tired_t = (self.stam < TIRED * self.stam_max[None, :])[:, ::-1]
+        tired_t = fatigue(self.stam / self.stam_max[None, :])[:, ::-1]        # 防守方的疲劳程度 0~1
         gsc = np.where(gtype == 1, gs[None, :, 0] * POSTURE_FX[posture[:, ::-1], FX_GUARD], np.where(gtype == 2, gs[None, :, 1], 1.0))
-        gsc = gsc * np.where(tired_t, TIRED_GUARD, 1.0)
+        gsc = gsc * (1.0 - FAT_HIGH_GUARD * tired_t)
         gm = np.where(gm < 1.0, np.clip(1.0 - (1.0 - gm) * gsc, 0.02, 1.0), gm)
         switching_t = (ph_t == MOVING) & np.isin(mv_t, (M_POSTURE, M_STANCE))      # 正在换架势 / 换站架，重心不稳
-        natural = (gtype == 0) & np.isin(ph_t, (FREE, MOVING)) & ~tired_t & ~doubled_t & ~switching_t
+        natural = (gtype == 0) & np.isin(ph_t, (FREE, MOVING)) & ~doubled_t & ~switching_t
         m = np.where(is_def, EVADE_MULT[np.minimum(mv_t, N_MOVES - 1), cls], gm)
         eff = np.where(np.abs(off_t) > ANG_GUARD, 0.5, 1.0) * np.where(stun_t > STUN_HURT, 0.5, 1.0)
         m = np.where(m < 1.0, 1.0 - (1.0 - m) * eff, m)
@@ -665,7 +677,8 @@ class Sim:
         ncat = np.where(tgt == 1, 4, np.select([p == 0, p == 2, typ == 1], [0, 1, 2], 3))
         post_d = posture[:, ::-1]
         p_nat = (NAT_BLOCK[post_d, ncat] * np.where((post_d == P_LOW) & open_st[:, None], PHILLY_OPEN, 1.0)
-                 * np.where(tgt == 1, gs[None, :, 1], gs[None, :, 0]) * eff * self.nat_scale[::-1][None, :])
+                 * np.where(tgt == 1, gs[None, :, 1], gs[None, :, 0]) * eff * self.nat_scale[::-1][None, :]
+                 * (1.0 - FAT_GUARD * tired_t))                              # 累了手慢慢掉下来
         nat_block = natural & (luck(self.luck_seed, tick, 5) < p_nat)
         m = np.where(nat_block, NAT_BLOCK_DMG, m)
         evaded = reach_ok & is_def & (m <= 1e-6)
@@ -677,8 +690,9 @@ class Sim:
         cramp = np.where((typ == 0) & (dist[:, None] < self.cramp[None, :]), 0.5, 1.0)
         counter = clean & ((ph_t == STARTUP) | ((ph_t == RECOVERY) & missed[:, ::-1] & (mv_t < 12))
                            | ((ph_t == RECOVERY) & (mv_t == M_CLINCH)))           # 扑空的缠抱和打空的拳一样露破绽
-        sf = np.clip(stam / self.stam_max, 0, 1)
-        base = (DMG[p] * DMG_SCALE * self.power[None, :] * (0.5 + 0.5 * sf) * cramp * np.where(counter, COUNTER_DMG, 1.0)
+        fat_a = fatigue(stam / self.stam_max)                         # 进攻方的疲劳程度
+        tire_hit = 1.0 - np.where(p <= 1, FAT_POWER_JAB, FAT_POWER) * fat_a
+        base = (DMG[p] * DMG_SCALE * self.power[None, :] * tire_hit * cramp * np.where(counter, COUNTER_DMG, 1.0)
                 * np.where(glance, GLANCE_MULT, 1.0) * self.dmg_mult[p, side])
         # 防守方的架势（只影响头部拳）、正反架对位、当天状态、上头
         post_t = posture[:, ::-1]
@@ -734,7 +748,7 @@ class Sim:
 
         # 计分（裁判只看打中的）
         # 裁判看"有效"击打：累了的软拳、擦到的、打在手臂上的，分都打折
-        pts = np.where(clean, SCORE[p] * (0.5 + 0.5 * sf) * np.where(glance, 0.5, 1.0) * np.minimum(m, 1.0), 0.0)
+        pts = np.where(clean, SCORE[p] * tire_hit * np.where(glance, 0.5, 1.0) * np.minimum(m, 1.0), 0.0)
         tally[:, :, 0] += np.where(IS_POWER[p] == 0, pts, 0.0)
         tally[:, :, 1] += np.where(IS_POWER[p] == 1, pts, 0.0)
         tally[:, :, 2] += blocked
@@ -845,7 +859,7 @@ class Sim:
         start_p = (free | can_combo) & is_pa & (stam >= self.cost_tab[pa, side])
         quick = np.isin(pa, (0, 1)) * POSTURE_FX[posture, FX_QUICK].astype(int)      # 低手位：刺拳从下面弹出去更快
         slow = (posture == P_LONG) & (IS_POWER[pa] == 1)                            # 长架出重拳要先收前手，有预兆
-        su = np.maximum(MIN_SU[pa], self.su_tab[pa, side] + (stam < 0.3 * self.stam_max) + (comp < COMP_FREEZE) - quick + slow)
+        su = np.maximum(MIN_SU[pa], self.su_tab[pa, side] + (fatigue(stam / self.stam_max) >= FAT_SLOW) + (comp < COMP_FREEZE) - quick + slow)
         ph = np.where(start_p, STARTUP, ph)
         mv = np.where(start_p, pa, mv)
         tm = np.where(start_p, su, tm)
@@ -918,7 +932,7 @@ class Sim:
         fwd = np.stack([np.cos(th), np.sin(th)], -1)
         lft = np.stack([-np.sin(th), np.cos(th)], -1)
         walking = free & np.isin(a, (FWD, BACK, LEFT, RIGHT, GUARD_FWD))
-        tired = 0.6 + 0.4 * np.clip(stam / self.stam_max, 0, 1)
+        tired = 1.0 - FAT_WALK * fatigue(stam / self.stam_max)
         hurt = np.where(stun > STUN_HURT, 0.7, 1.0)
         spd = (self.walk[None, :] * tired * hurt * POSTURE_FX[posture, FX_WALK])[..., None]
         cf = np.select([a == FWD, a == BACK, a == GUARD_FWD], [1.0, -BACK_MULT, GUARD_WALK], 0.0)[..., None]

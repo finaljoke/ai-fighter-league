@@ -683,9 +683,9 @@ check("刺拳只刺一下：挨了一记刺拳后来得及把架子举起来挡�
 
 r_sj, r_sb = nat_rate(B.P_STANDARD, B.JAB_H), nat_rate(B.P_STANDARD, B.JAB_B)
 r_busy, r_tired = nat_rate(B.P_STANDARD, B.JAB_H, hold1=B.JAB_H), nat_rate(B.P_STANDARD, B.JAB_H, tired=True)
-check("默认护架：站着时刺拳约一半打在拳套上、身体拳约四成打在手肘上（都算被挡）；自己正在出拳、累垮了手掉下来时挡不住",
-      abs(r_sj - 0.5) < 0.05 and abs(r_sb - 0.4) < 0.05 and r_busy < 0.05 and r_tired < 0.05,
-      f"刺拳 {r_sj:.0%}、身体刺拳 {r_sb:.0%} 被挡；自己在出拳时 {r_busy:.0%}，累垮时 {r_tired:.0%}")
+check("默认护架：站着时刺拳约一半打在拳套上、身体拳约四成打在手肘上（都算被挡）；自己正在出拳时挡不住；累了手慢慢掉（体能一成时挡三成左右）",
+      abs(r_sj - 0.5) < 0.05 and abs(r_sb - 0.4) < 0.05 and r_busy < 0.05 and 0.26 < r_tired < 0.40,
+      f"刺拳 {r_sj:.0%}、身体刺拳 {r_sb:.0%} 被挡；自己在出拳时 {r_busy:.0%}，体能一成时 {r_tired:.0%}")
 r_pj, r_pc, r_pco = nat_rate(B.P_LOW, B.JAB_H), nat_rate(B.P_LOW, B.CROSS_H), nat_rate(B.P_LOW, B.CROSS_H, opp_southpaw=True)
 check("低手位（肩卷）：前肩卸掉约六成后手直拳，刺拳只挡一成；对反架对手效果减半",
       abs(r_pc - 0.6) < 0.05 and abs(r_pj - 0.1) < 0.04 and abs(r_pco - 0.3) < 0.05,
@@ -725,9 +725,13 @@ def points_when(stam_frac, gap=1.0):
     s.posture[0, 1] = B.P_LOW                       # 对手低手位，排除自然站姿的影响
     inf = run(s, {0: B.JAB_B}, ticks=10)
     return sum(float(i["points"][0, 0]) for i in inf)
-check("计分看有效性：累了打出的软拳分数更少，擦到的减半",
-      points_when(0.2) < 0.7 * points_when(1.0) and abs(points_when(1.0, gap=float(make().rng_tab[1, 0]) - 0.02) - 0.5 * points_when(1.0)) < 1e-6,
-      f"满体能 {points_when(1.0):.2f} 分，体能 20% {points_when(0.2):.2f} 分")
+check("计分看有效性：累了打出的拳软一点、分数少一点（刺拳见底时也只少 3%），擦到的减半",
+      0.95 * points_when(1.0) < points_when(0.05) < points_when(1.0) and abs(points_when(1.0, gap=float(make().rng_tab[1, 0]) - 0.02) - 0.5 * points_when(1.0)) < 1e-6,
+      f"满体能 {points_when(1.0):.3f} 分，体能 5% {points_when(0.05):.3f} 分")
+fz = lambda x: float(B.fatigue(np.array(x)))
+check("疲劳是先平后陡的连续变化：体能五成以上没影响，五成到两成缓升，两成以下加速，没有突然全面失效",
+      fz(1.0) == 0 and fz(0.5) == 0 and abs(fz(0.2) - 0.4) < 1e-9 and fz(0.0) == 1.0 and (fz(0.35) - fz(0.5)) < (fz(0.0) - fz(0.15)),
+      f"体能 50% / 35% / 20% / 10% / 0 的疲劳程度：{fz(0.5):.2f} / {fz(0.35):.2f} / {fz(0.2):.2f} / {fz(0.1):.2f} / {fz(0.0):.2f}")
 
 s = make(0.7)
 run(s, {0: B.CLINCH}, ticks=6)

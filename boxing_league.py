@@ -234,7 +234,7 @@ def snapshot_eval(bodies, pols, bot, ver, n, sparring_body, skills=None):
     out["AvB_B"] = summarize(fight_metrics(bt, 1))
     out["AvB_A"]["coverage"] = coverage(technique_table(bt, 0))[0]
     out["AvB_B"]["coverage"] = coverage(technique_table(bt, 1))[0]
-    a, b = out["A_vs_S"], out["B_vs_S"]
+    a, b = out[f"{bodies[0].id}_vs_S"], out[f"{bodies[1].id}_vs_S"]
     line = (f"  [v{ver:04d}] vs陪练 胜率 A {a['win']:.2f} B {b['win']:.2f} | 提前结束 A {a['ko_win'] + a['tko_win']:.2f} "
             f"B {b['ko_win'] + b['tko_win']:.2f} | 距离 A {a['mean_dist']:.2f} B {b['mean_dist']:.2f} | 出拳/10s A {a['punch_rate']:.1f} "
             f"B {b['punch_rate']:.1f} | 会用技术 A {a['coverage']} B {b['coverage']} | AvB A胜 {out['AvB_A']['win']:.2f} "

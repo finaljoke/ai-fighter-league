@@ -20,7 +20,8 @@ import numpy as np
 import boxing
 import league as L
 import sim as sim1d
-from bodies import LANKY, STOCKY, SPARRING
+import bodies as BD
+from bodies import SPARRING
 from bots import SparringBot
 from boxing_bots import BoxingSparring
 from nets import Agent, save_policy
@@ -55,6 +56,10 @@ def main():
     ap.add_argument("--kd-reward", type=float, default=None)
     # 留力训练（实验 1b）：每场开打前抽签，floor-frac 的比赛给双方各设一条体能线（floor-lo~floor-hi 之间随机），
     # 体能低于线时不准出拳。只在训练时有，AI 看不到，评估和正式比赛都没有
+    # 角色：bodies.py 里的 id，用逗号隔开（实验体 A,B；第一季正史 GY,LJ）
+    ap.add_argument("--bodies", default="A,B")
+    # 成长档案（正史训练用）：每个存档节点录几场两人对打的完整回放，训练里第一次打中、第一次击倒之类的里程碑也记下来
+    ap.add_argument("--record", type=int, default=0)
     ap.add_argument("--floor-frac", type=float, default=0.0)
     ap.add_argument("--floor-lo", type=float, default=0.2)
     ap.add_argument("--floor-hi", type=float, default=0.6)
@@ -77,7 +82,7 @@ def main():
     if os.path.exists(run_dir):
         raise SystemExit(f"{run_dir} 已存在。规矩是不覆盖旧记录，换个 --run 名字。")
     os.makedirs(os.path.join(run_dir, "ckpt"))
-    bodies = (LANKY, STOCKY)
+    bodies = tuple(BD.ALL[x] for x in args.bodies.split(","))
     with open(os.path.join(run_dir, "config.json"), "w", encoding="utf-8") as f:
         json.dump({"args": vars(args), "sim_version": S.SIM_VERSION,
                    "reward": {"per_point": boxing.REWARD_PER_POINT, "kd": boxing.REWARD_KD} if box else None,
@@ -131,6 +136,8 @@ def main():
                 rec["skills"] = skills[side].round(4).tolist()
             append(run_dir, "versions.jsonl", rec)
         evaluate(run_dir, bodies, [p[-1] for p in pool], bot, ver, it, total_ticks, args.eval_n, box, skills)
+        if box and args.record:
+            record_growth(run_dir, bodies, [p[-1] for p in pool], ver, it, total_ticks, fights_done[0], skills, args.record)
 
     def assign(mask):
         idx = np.flatnonzero(mask)
@@ -152,6 +159,8 @@ def main():
                 ctrl[pick, 1 - side] = rng.choice(len(w), size=pick.size, p=w / w.sum())
 
     floor = np.zeros((N, 2))
+    fights_done = [0]                      # 正在学的版本打完了多少场（两边都是当前版本的才算）
+    firsts = [set(), set()]
     punches = np.arange(boxing.PUNCH0, boxing.PUNCH0 + 12) if box else None
 
     def new_floors(mask):
@@ -217,6 +226,9 @@ def main():
                     rec = vs_pool[side][ctrl[i, 1 - side]]
                     rec[0] += int(info["winner"][i] == side)
                     rec[1] += 1
+            if box and args.record:
+                note_milestones(run_dir, bodies, info, done, ctrl < 0, firsts, it, total_ticks, fights_done[0])
+                fights_done[0] += int((done & (ctrl < 0).any(1)).sum())
             fin = done & main
             if fin.any():
                 w = info["winner"][fin]
@@ -260,8 +272,8 @@ def main():
         append(run_dir, "train_log.jsonl", log)
         if it % 5 == 0 or it == 1:
             print(f"it {it:4d} | {total_ticks/1e6:6.1f}M ticks | {el:6.0f}s | A/B/draw {res['A']}/{res['B']}/{res['draw']} "
-                  f"ko {res['ko']} | gap {log['mean_gap']:.2f} | entA {stats['A']['ent']:.2f} entB {stats['B']['ent']:.2f} "
-                  f"klA {stats['A']['kl']:.4f}", flush=True)
+                  f"ko {res['ko']} | gap {log['mean_gap']:.2f} | entA {stats[bodies[0].id]['ent']:.2f} entB {stats[bodies[1].id]['ent']:.2f} "
+                  f"klA {stats[bodies[0].id]['kl']:.4f}", flush=True)
         if it % args.snap_every == 0:
             snapshot(it)
 
@@ -325,6 +337,47 @@ def gae(rew, val, done, last_v, gamma, lam):
         last = delta + gamma * lam * nonterm * last
         adv[t] = last
     return adv
+
+
+MILESTONES = [
+    ("第一次出拳", lambda i, k: i["fired"][:, k] > 0),
+    ("第一次干净打中", lambda i, k: i["outcome"][:, k] == 1),
+    ("第一次打出反击", lambda i, k: i["counter"][:, k]),
+    ("第一次躲开来拳", lambda i, k: i["evaded_by"][:, k] >= 0),
+    ("第一次用架子挡住来拳", lambda i, k: i["blocked_by"][:, k] > 0),
+    ("第一次虚晃骗到对手", lambda i, k: i["faked"][:, 1 - k]),
+    ("第一次抱住对手", lambda i, k: i["clinch"][:, k]),
+    ("第一次打倒对手", lambda i, k: i["kd"][:, 1 - k]),
+    ("第一次一拳打中下颌把人打倒", lambda i, k: i["flash_kd"][:, k] & (i["zone"][:, k] == boxing.Z_JAW)),
+    ("第一次肝区击倒", lambda i, k: i["liver_kd"][:, k]),
+    ("第一次 KO 获胜", lambda i, k: i["done"] & (i["winner"] == k) & (i["method"] == boxing.M_KO)),
+    ("第一次 TKO 获胜", lambda i, k: i["done"] & (i["winner"] == k) & (i["method"] == boxing.M_TKO)),
+    ("第一次点数判定获胜", lambda i, k: i["done"] & (i["winner"] == k) & (i["method"] == boxing.M_DEC)),
+]
+
+
+def note_milestones(run_dir, bodies, info, done, learn, firsts, it, ticks, fights):
+    """正在学的那一方第一次做到某件事时记一笔（训练里的比赛没录像，录像在每个存档节点另打）。"""
+    for k in (0, 1):
+        for name, test in MILESTONES:
+            if name in firsts[k]:
+                continue
+            hit = np.asarray(test(info, k)) & learn[:, k]
+            if hit.any():
+                firsts[k].add(name)
+                append(run_dir, "milestones.jsonl", {"char": bodies[k].id, "name": bodies[k].label, "event": name,
+                                                     "iter": it, "ticks": int(ticks), "fights": int(fights)})
+
+
+def record_growth(run_dir, bodies, pols, ver, it, ticks, fights, skills, n):
+    """成长档案：这个版本的两人打 n 场完整的比赛，存回放和战绩，做节目时直接剪。"""
+    import boxing_league as BL
+    bt = BL.run_matches(bodies, pols, tuple(b.id for b in bodies), n, seed=90_000 + ver, skills=skills)
+    recs = [BL.replay_record(bt, i, [{"name": b.label} for b in bodies]) for i in range(n)]
+    os.makedirs(os.path.join(run_dir, "growth"), exist_ok=True)
+    with open(os.path.join(run_dir, "growth", f"v{ver:04d}.json"), "w", encoding="utf-8") as f:
+        json.dump({"version": ver, "iter": it, "ticks": int(ticks), "fights": int(fights), "replays": recs},
+                  f, ensure_ascii=False)
 
 
 def evaluate(run_dir, bodies, pols, bot, ver, it, ticks, n, box=False, skills=None):
