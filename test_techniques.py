@@ -327,7 +327,7 @@ s.tally[0] = [[5, 4, 0, 0], [5, 4, 0, 0]]
 s.kd_round[0, 1] = 1
 s.t_round[0] = B.ROUND_TICKS - 1
 inf = run(s, {}, ticks=1)
-check("击倒在打分上是 10-8（平手回合被打倒一次）", inf[0]["judges"][0].tolist() == [[10, 9]] * 3,
+check("击倒在打分上是 10-8（平手回合被打倒一次）", inf[0]["judges"][0].tolist() == [[10, 8]] * 3,
       f"裁判 {inf[0]['judges'][0].tolist()}")
 
 s = make(1.0)
@@ -741,16 +741,50 @@ def tko_cause_of(setup, a0, ticks, x0=None):
     return (B.METHOD_NAMES[end[0]["method"][0]], int(end[0]["tko_cause"][0])) if end else None
 
 
-s = make(1.0)
-s.hp[0, 1] = 0.5
-inf = run(s, {0: B.JAB_B}, ticks=10)                       # 打身体：不会一拳击倒，只看体力归零会不会结束比赛
-check("体力归零不结束比赛：体力只是资源池（累计伤害），不判胜负", not any(i["done"][0] for i in inf) and s.hp[0, 1] == 0.0,
-      f"体力 {s.hp[0, 1]:.1f}，{'比赛结束了' if s.over[0] else '比赛继续'}")
+c_hp = tko_cause_of(lambda s: s.hp.__setitem__((0, 1), 0.5), {0: B.JAB_B}, 10)      # 打身体：不会一拳击倒，只看体力归零
 c_un = tko_cause_of(lambda s: s.stun.__setitem__((0, 1), 85), {k * 8: B.JAB_H for k in range(10)}, 85, x0=B.RING - B.BODY_R - 1.0)
 c_kd = tko_cause_of(lambda s: (s.stun.__setitem__((0, 1), 99), s.kd_round.__setitem__((0, 1), 2), s.kd_total.__setitem__((0, 1), 2)),
                     {0: B.CROSS_H}, 10)
-check("统计口径：TKO 记下原因（2 受伤后连续挨打不还手、3 一回合倒三次）",
-      c_un == ("TKO", 2) and c_kd == ("TKO", 3), f"连续挨打 {c_un}，倒三次 {c_kd}")
+check("体力（累计伤害）归零 = 裁判判定无法继续 = TKO；TKO 记下原因（1 体力归零、2 受伤后连续挨打不还手、3 一回合倒三次）",
+      c_hp == ("TKO", 1) and c_un == ("TKO", 2) and c_kd == ("TKO", 3), f"体力归零 {c_hp}，连续挨打 {c_un}，倒三次 {c_kd}")
+
+
+# ------------------------------------------------------------------ 胜负规则（v10）：铃声不救人、击倒回合计分
+def bell_case(n_rounds):
+    s = make_n(300, n_rounds=n_rounds)
+    s.stun[:, 1] = 99
+    s.t_round[:] = B.ROUND_TICKS - 8                   # 回合只剩 8 帧，后手直拳一打中就倒（晕眩到线）
+    inf = run_n(s, {0: B.CROSS_H}, ticks=8 + B.DOWN_TICKS + 5)
+    kd_t = np.array([next((t for t, i in enumerate(inf) if i["kd"][e, 1]), -1) for e in range(s.n)])
+    end_t = np.array([next((t for t, i in enumerate(inf) if i["done"][e]), 10 ** 6) for e in range(s.n)])
+    rnd_t = np.array([next((t for t, i in enumerate(inf) if i["round"][e] > 0), 10 ** 6) for e in range(s.n)])
+    meth = np.array([int(next((i["method"][e] for i in inf if i["done"][e]), 0)) for e in range(s.n)])
+    return kd_t, end_t, rnd_t, meth
+
+
+kd_t, _, rnd_t, _ = bell_case(3)
+ok_mid = (kd_t >= 0).all() and (rnd_t >= kd_t + B.DOWN_TICKS).all()
+kd_t1, end_t1, _, meth1 = bell_case(1)
+ok_last = (kd_t1 >= 0).all() and (end_t1 >= kd_t1 + B.DOWN_TICKS).all() and (meth1 == B.M_KO).any() and (meth1 == B.M_DEC).any()
+check("铃声不救人：回合末倒地，时间到了也要把读秒数完才换回合；最后一回合也一样，数完站不起来就是 KO",
+      ok_mid and ok_last, f"中间回合 {'✓' if ok_mid else '✗'}；最后一回合 {'✓' if ok_last else '✗'}（KO {(meth1 == B.M_KO).mean():.0%}，站起来后判定 {(meth1 == B.M_DEC).mean():.0%}）")
+
+
+def round_score(kd0, kd1, tally0, tally1):
+    s = make(1.0)
+    s.kd_round[0] = [kd0, kd1]
+    s.tally[0, 0], s.tally[0, 1] = tally0, tally1
+    s.t_round[0] = B.ROUND_TICKS - 1
+    run(s, {}, ticks=1)
+    return s.judge[0].tolist()
+
+
+sc_kd = round_score(0, 1, [0, 0, 0, 0], [8, 6, 0, 0])          # 1 号出拳占优，但被打倒一次
+sc_kd2 = round_score(0, 2, [0, 0, 0, 0], [8, 6, 0, 0])
+sc_even = round_score(1, 1, [2, 0, 0, 0], [8, 6, 0, 0])        # 双方各倒一次，相互抵消，按出拳判
+check("有击倒的回合判给打倒对方的人：倒一次 10-8，倒两次 10-7；双方都倒过就相互抵消，按出拳判",
+      all(j == [10, 8] for j in sc_kd) and all(j == [10, 7] for j in sc_kd2) and all(j == [9, 10] for j in sc_even),
+      f"倒一次 {sc_kd[0]}，倒两次 {sc_kd2[0]}，各倒一次 {sc_even[0]}")
 
 
 # ------------------------------------------------------------------ 落点与一拳击倒（v9）
@@ -782,10 +816,15 @@ p_cross = pk(B.DMG[B.CROSS_H - B.PUNCH0] * B.DMG_SCALE, STRAIGHT, B.Z_JAW, False
 p_hurt = pk(d_counter_hook, HOOK, B.Z_JAW, True, stun=60)
 p_low = pk(d_counter_hook, HOOK, B.Z_JAW, True, hp=30)
 p_jab = pk(B.DMG[B.JAB_H - B.PUNCH0] * B.DMG_SCALE, STRAIGHT, B.Z_FRONT, False)
-check("一拳击倒：满状态挨一记反击后手勾拳打中下颌约 25% 倒地；后手直拳打下颌很难打倒；刺拳打额头打不倒",
-      0.15 <= p_fresh <= 0.35 and p_cross < 0.05 and p_jab == 0.0, f"反击勾拳 {p_fresh:.0%}，后手直拳 {p_cross:.1%}，刺拳额头 {p_jab:.0%}")
+check("一拳击倒：属性相同、满状态挨一记反击后手勾拳打中下颌约 25% 倒地；普通后手直拳打下颌少见；刺拳打额头打不倒",
+      0.20 <= p_fresh <= 0.30 and p_cross < 0.10 and p_jab == 0.0, f"反击勾拳 {p_fresh:.0%}，后手直拳 {p_cross:.1%}，刺拳额头 {p_jab:.0%}")
 check("最近挨了很多打（晕眩）或本场伤得重（体力低），同一拳更容易把人打倒",
-      p_hurt > 0.6 and p_low > p_fresh, f"被打晃 {p_hurt:.0%}，体力 30 {p_low:.0%}，满状态 {p_fresh:.0%}")
+      p_hurt > 2 * p_fresh and p_low > 1.5 * p_fresh, f"被打晃 {p_hurt:.0%}，体力 30 {p_low:.0%}，满状态 {p_fresh:.0%}")
+from bodies import LANKY, STOCKY
+p_ab = pk(d_counter_hook * LANKY.power / STOCKY.chin, HOOK, B.Z_JAW, True)
+p_ba = pk(d_counter_hook * STOCKY.power / LANKY.chin, HOOK, B.Z_JAW, True)
+check("爆冷：拳轻的打下巴硬的，干净的反击也有一成左右机会打倒；拳重的打下巴软的，也不是一拳必倒",
+      0.05 <= p_ab <= 0.15 and 0.4 <= p_ba <= 0.7, f"A（力量 {LANKY.power}）打 B（抗击打 {STOCKY.chin}）{p_ab:.0%}；B（力量 {STOCKY.power}）打 A（抗击打 {LANKY.chin}）{p_ba:.0%}")
 
 s = make_n(2000, gap=1.0)
 inf = run_n(s, {0: B.CROSS_H}, ticks=12)
@@ -828,6 +867,61 @@ z3, k3 = luck_run(other)
 check("运气只由这场的种子、第几帧、哪一方决定：同一个种子落点和击倒完全一样，换个种子就不一样",
       (z1 == z2).all() and (k1 == k2).all() and (z1 != z3).any() and k1.sum() > 0,
       f"同种子一致 {bool((z1 == z2).all() and (k1 == k2).all())}，换种子不同的落点 {(z1 != z3).sum()} 处，击倒 {k1.sum()} 次")
+
+
+# ------------------------------------------------------------------ 肝区、心窝（v10）
+liver = lambda typ, right, sp=False, tired=False, skill=0.5, glance=False: float(
+    B.body_zone_probs(one(typ), one(right), one(sp), one(tired), one(skill), one(glance))[..., 0])
+check("肝在人体右侧：左手打出的身体勾拳最常打中肝区，右手勾拳多半打在左肋",
+      liver(HOOK, False) > 5 * liver(HOOK, True), f"左手勾拳 {liver(HOOK, False):.0%}，右手勾拳 {liver(HOOK, True):.0%}")
+check("对手站反架（右侧在前）时直拳更容易打到肝；累垮了手肘护不住，肝区更容易挨打；擦到的打不到肝",
+      liver(STRAIGHT, True, sp=True) > liver(STRAIGHT, True) and liver(HOOK, False, tired=True) > liver(HOOK, False)
+      and liver(HOOK, False, glance=True) == 0.0,
+      f"直拳打正架 {liver(STRAIGHT, True):.0%} / 反架 {liver(STRAIGHT, True, sp=True):.0%}，累垮 {liver(HOOK, False, tired=True):.0%}")
+
+d_lhook = B.DMG[B.LHOOK_B - B.PUNCH0] * B.DMG_SCALE
+pl = lambda body: float(B.kd_prob(one(d_lhook * B.LIVER_TYPE_F[HOOK]), B.liver_threshold(one(body), one(100.0))))
+check("连续爆肝：满状态挨一记前手勾拳打中肝区约 15% 倒地；身体伤越重，同一拳越容易倒（身体伤 60 时约五成）",
+      0.10 <= pl(0) <= 0.20 and 0.40 <= pl(60) <= 0.60 and pl(0) < pl(30) < pl(60) < pl(90),
+      f"身体伤 0 / 30 / 60 / 90：{pl(0):.0%} / {pl(30):.0%} / {pl(60):.0%} / {pl(90):.0%}")
+
+
+def liver_case(n=600):
+    s = make_n(n, gap=0.7)
+    s.body[:, 1] = 70                                  # 已经挨了一轮身体拳
+    infos = []
+    for t in range(80):
+        a1 = B.STAY if t < 15 else B.JAB_H              # 1 号先站着挨这一拳，之后一直想出刺拳
+        infos.append(s.step(np.tile([[B.LHOOK_B if t == 0 else B.STAY, a1]], (n, 1)))[2])
+    lk = np.array([[i["liver_kd"][e, 0] for i in infos] for e in range(n)])
+    kd = np.array([[i["kd"][e, 1] for i in infos] for e in range(n)])
+    st = np.array([[i["started"][e, 1] > 0 for i in infos] for e in range(n)])
+    hit = lk.any(1)
+    t0, tf = lk.argmax(1), kd.argmax(1)
+    delay_ok = all(kd[e].any() and B.LIVER_DELAY[0] <= tf[e] - t0[e] <= B.LIVER_DELAY[1] + 1 for e in np.flatnonzero(hit))
+    no_punch = all(not st[e, t0[e] + 1:tf[e]].any() for e in np.flatnonzero(hit))
+    return hit.sum(), delay_ok, no_punch, int(kd[~hit].any(1).sum())
+
+
+n_lk, delay_ok, no_punch, other_kd = liver_case()
+check("肝区击倒延迟 1~2 秒才倒，中间弯着腰出不了拳（对手想出拳也出不来）",
+      n_lk > 20 and delay_ok and no_punch, f"{n_lk} 场打中肝区倒地，延迟 {'✓' if delay_ok else '✗'}，延迟中没出拳 {'✓' if no_punch else '✗'}")
+
+
+def plexus_case(n=800):
+    s = make_n(n, gap=1.0)
+    s.posture[:, 1] = B.P_LOW
+    infos = run_n(s, {0: B.CROSS_B}, ticks=30)
+    z = np.array([max((int(i["zone"][e, 0]) for i in infos), default=-1) for e in range(n)])
+    kd = np.array([any(i["kd"][e, 1] for i in infos) for e in range(n)])
+    return z, kd, s.stam[:, 1] / s.stam_max[1]
+
+
+z_px, kd_px, st_px = plexus_case()
+px, ot = z_px == B.Z_PLEXUS, z_px == B.Z_BODY
+check("心窝：打中了喘不上气，体能多掉一大块、回得慢，但不会把人打倒",
+      px.sum() > 50 and ot.sum() > 50 and st_px[px].mean() < st_px[ot].mean() - 0.05 and not kd_px[px].any(),
+      f"打中心窝后体能 {st_px[px].mean():.0%}，打中其他部位 {st_px[ot].mean():.0%}，心窝倒地 {int(kd_px[px].sum())} 次")
 
 
 if __name__ == "__main__":

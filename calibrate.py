@@ -19,16 +19,18 @@ from bodies import LANKY, STOCKY
 
 # kind：real = 真实比赛数据；design = 设计约束（不是统计数据）；record = 只记录，暂不设目标
 TARGETS = [
-    ("thrown_pm", "每分钟出拳（每人）", 18.0, 22.0, "real", "职业约 19.5（ESPN 2012）；奥运约 20~21（Davis 2015/2018）"),
+    ("thrown_pm", "每分钟出拳（每人）", 18.0, 22.0, "real", "职业约 19.5（ESPN 2012，次中量级）；重量级拳王赛约 12.5（Finlay 2022）"),
     ("connect", "总命中率", 0.30, 0.40, "real", "职业平均约 32%（ESPN 2012）；重量级拳王赛 34.6%（Finlay 2022）"),
     ("connect_jab", "刺拳命中率", 0.18, 0.30, "real", "没有公开总平均；由总命中和重拳命中推算约 22~26%"),
     ("connect_power", "重拳命中率", 0.30, 0.45, "real", "CompuBox 平均 36.9%（Bad Left Hook 2019）"),
     ("tired_share", "累垮时间占比（体能 < 25%）", 0.0, 0.20, "design", "常识约束：真实拳手不会整场空着油箱打"),
     ("posture_max", "最常用架势的时间占比（两人都算）", 0.0, 0.60, "design", "没有一种架势被所有角色都用超过六成时间"),
-    ("hp_tko_share", "血条归零判 TKO 的比例", 0.0, 0.0, "design", "原则：血条只是资源池，不判胜负"),
+    ("hp_tko_share", "TKO 里体力归零的比例", None, None, "record", "v10 起体力归零判 TKO 是规则的一部分，只记录"),
     ("stoppage", "提前结束比例（KO+TKO）", None, None, "record", "用户定：偏高是好事，不设上限（参照：职业 47%，KO 15%、TKO 32%）"),
     ("kd_per_fight", "每场击倒次数", None, None, "record", "没有可靠数据，不设硬指标"),
     ("last_round_stop", "提前结束里发生在最后一回合的比例", None, None, "record", "真实比赛偏早段（Hutchison 2014；职业平均第 2.59 回合）"),
+    ("underdog_win", "爆冷：弱势一方的胜率", None, None, "record", "这批比赛里赢得少的一方赢了多少；用户定：要有爆冷"),
+    ("underdog_stop", "爆冷：弱势一方的胜场里靠 KO/TKO 的比例", None, None, "record", "一拳翻盘"),
 ]
 
 
@@ -65,6 +67,14 @@ def metrics(bt):
     out["kd_per_fight"] = float((f["kd"] & v[..., None]).sum() / n)
     out["last_round_stop"] = float((stop & (bt.end_round >= bt.n_rounds - 1)).sum() / max(1, stop.sum()))
     out["win"] = [int((bt.winner == 0).sum()), int((bt.winner == 1).sum())]
+    dog = int(np.argmin(out["win"]))                    # 弱势一方：这批比赛里赢得少的那个
+    dog_w = bt.winner == dog
+    out["underdog_win"] = float(dog_w.mean())
+    out["underdog_stop"] = float((dog_w & stop).sum() / max(1, dog_w.sum()))
+    # 风格：某一方开场用计划 p 时，这场提前结束的比例（每场随机抽计划时才有意义）
+    plan0 = f["plan"][0]
+    out["stop_by_plan"] = {B.PLAN_NAMES[q]: [round(float(stop[(plan0 == q).any(1)].mean()), 3), int((plan0 == q).any(1).sum())]
+                           for q in range(B.N_PLANS) if (plan0 == q).any()}
     return out
 
 
@@ -78,7 +88,7 @@ def report(m):
     lines = []
     for key, label, lo, hi, kind, src in TARGETS:
         val = m[key]
-        tgt = "待定" if lo is None else (f"{lo:g}" if lo == hi else f"{lo:g}~{hi:g}")
+        tgt = "不设" if lo is None else (f"{lo:g}" if lo == hi else f"{lo:g}~{hi:g}")
         pct = key.startswith("connect") or key.endswith("share") or key in ("stoppage", "posture_max", "last_round_stop")
         shown = f"{val:.1%}" if pct else f"{val:.2f}"
         if pct and lo is not None:
@@ -87,6 +97,8 @@ def report(m):
     lines.append(f"  结局：KO {m['ko']:.0%}、TKO {m['tko']:.0%}、判定 {m['decision']:.0%}、平局 {m['draw']:.0%}；TKO 原因 {m['tko_cause']}；"
                  f"A 胜 {m['win'][0]}、B 胜 {m['win'][1]}；平均 {m['seconds']:.0f} 秒")
     lines.append(f"  架势占比（标准/长架/抱架/低手） A {m['posture'][0]}  B {m['posture'][1]}；举架或闪躲占时 A {m['defend_share'][0]:.1%} B {m['defend_share'][1]:.1%}")
+    if len(m["stop_by_plan"]) > 1:
+        lines.append("  按开场战术计划的提前结束比例：" + "，".join(f"{k} {v[0]:.0%}（{v[1]} 场）" for k, v in m["stop_by_plan"].items()))
     return "\n".join(lines)
 
 
@@ -96,16 +108,18 @@ def main():
     ap.add_argument("--version", type=int, default=None)
     ap.add_argument("--n", type=int, default=128)
     ap.add_argument("--seed", type=int, default=4242)
+    ap.add_argument("--plans", choices=["free", "random"], default="free", help="free：双方都自由发挥；random：每场随机抽战术计划（看风格差异）")
     args = ap.parse_args()
     run = load_run(args.run, args.version)
     bodies = (LANKY, STOCKY)
     skills = np.stack([np.array(run["pick"][c].get("skills", SC.talent(b))) for c, b in zip("AB", bodies)])
     t0 = time.time()
-    bt = BL.run_matches(bodies, (run["pols"]["A"], run["pols"]["B"]), ("A", "B"), args.n, seed=args.seed, skills=skills)
+    bt = BL.run_matches(bodies, (run["pols"]["A"], run["pols"]["B"]), ("A", "B"), args.n, seed=args.seed, skills=skills,
+                        plans=None if args.plans == "random" else (0, 0))
     m = metrics(bt)
     print(f"{args.run} v{run['version']}，{args.n} 场 A 对 B（{time.time() - t0:.0f} 秒）")
     print(report(m))
-    rec = {"version": run["version"], "n": args.n, "seed": args.seed, "sim_version": B.SIM_VERSION,
+    rec = {"version": run["version"], "n": args.n, "seed": args.seed, "plans": args.plans, "sim_version": B.SIM_VERSION,
            "time": time.strftime("%Y-%m-%d %H:%M:%S"), **m}
     with open(os.path.join(run["dir"], "calibration.jsonl"), "a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec, ensure_ascii=False) + "\n")

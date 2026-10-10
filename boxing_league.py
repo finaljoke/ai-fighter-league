@@ -39,7 +39,7 @@ def run_matches(bodies, ctrls, names, n, seed, n_rounds=B.N_ROUNDS, skills=None,
     """skills：(2, N_TECH) 当前熟练度；不给就用天赋。plans：双方开场的战术计划。
     plan_rank：给了就由角落在回合间调整——这一回合多数裁判判输了，就换成排名里的下一个计划。"""
     sim = B.Sim(n, bodies, seed=seed, auto_reset=False, n_rounds=n_rounds, skills=skills, form_sd=0.0)
-    sim.plan_fixed = np.array(plans)
+    sim.plan_fixed = None if plans is None else np.array(plans)       # None：每场随机抽战术计划
     if form_sd:
         sim.form_sd = form_sd
     if form_mean is not None:

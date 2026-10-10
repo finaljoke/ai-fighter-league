@@ -7,7 +7,7 @@
 """
 import numpy as np
 
-SIM_VERSION = "box2d-v9"
+SIM_VERSION = "box2d-v10"
 
 DT = 0.05
 RING = 6.1
@@ -123,8 +123,8 @@ REWARD_KD = 0.3
 GLANCE_FRAC, GLANCE_MULT = 0.08, 0.6
 
 # 落点与击倒：干净打中头部时先抽落点，冲击 = 伤害 × 落点系数 × 拳种系数，再和挨打者此刻的抗击打线比
-Z_JAW, Z_SIDE, Z_FRONT = range(3)
-ZONE_NAMES = ["下颌", "头侧", "额头面门"]
+Z_JAW, Z_SIDE, Z_FRONT, Z_LIVER, Z_PLEXUS, Z_BODY = range(6)
+ZONE_NAMES = ["下颌", "头侧", "额头面门", "肝区", "心窝", "身体其他"]
 #                      下颌   头侧   额头面门   （起点，没有现成数据，以后用击倒率校准）
 ZONE_BASE = np.array([[0.30, 0.05, 0.65],     # 直拳
                       [0.45, 0.40, 0.15],     # 勾拳
@@ -133,9 +133,23 @@ ZONE_F = np.array([1.0, 0.6, 0.25])           # 打下颌头部转得最猛：KO
 ROT_F = np.array([0.75, 1.0, 0.4])            # 直拳 / 勾拳 / 上勾拳：奥运拳手打假人，头部转动勾拳 > 直拳 > 上勾拳（Viano 2005）
 JAW_POSTURE = np.array([1.0, 1.0, 0.6, 1.3])  # 防守方架势：低姿抱架收着下巴 ×0.6，低手位 ×1.3
 JAW_TIRED = 1.3                               # 累垮了手掉下来，下巴更露
-JAW_SKILL = 0.4                               # 进攻方这一拳的熟练度从 0.5 到 1.0，打中下颌的概率 ×1.0 → ×1.2
+AIM_SKILL = 0.4                               # 进攻方这一拳的熟练度从 0.5 到 1.0，打中下颌 / 肝区的概率 ×1.0 → ×1.2
 UNSEEN_F = 1.15                               # 没看见的拳：比防守方的反应快，或者他自己正在起手（证据弱，只给小加成）
-KD_T0, KD_SLOPE, KD_FLOOR = 12.3, 0.12, 0.3   # 满状态的抗击打线（定在：满状态挨一记反击后手勾拳打中下颌，约 25% 倒地）；过线后概率涨多快；冲击不到线的三成不可能倒
+# 身体落点：肝在人体右侧，所以左手打出的勾拳最容易打中（正架就是前手勾拳）。数字是起点，没有数据，用击倒率校准
+#                             肝区  心窝  其他（肋部、腹部、手肘上）
+BODY_ZONE_BASE = np.array([[[0.15, 0.45, 0.40], [0.15, 0.45, 0.40]],    # 直拳（左手 / 右手）
+                           [[0.60, 0.05, 0.35], [0.05, 0.05, 0.90]],    # 勾拳：左手绕到对手右侧的肝；右手多半打在左肋
+                           [[0.30, 0.40, 0.30], [0.05, 0.55, 0.40]]])   # 上勾拳
+LIVER_SOUTHPAW = 1.3                          # 对手站反架，右侧（肝）在前，直拳更容易打到
+LIVER_TIRED = 1.3                             # 累垮了手肘护不住身体
+LIVER_TYPE_F = np.array([0.8, 1.0, 0.9])      # 直拳 / 勾拳 / 上勾拳打肝的冲击系数（起点）
+LIVER_T0, LIVER_BODY = 9.71, 0.72             # 满状态肝区抗击打线（定在：满状态挨一记前手勾拳打中肝区约 15% 倒地）；
+                                              # 身体伤满时线降 72%（定在：身体伤 60 时同一拳约 50%）——连续打肝越打越危险
+LIVER_DELAY = (20, 40)                        # 肝区击倒延迟 1~2 秒才倒，期间弯着腰出不了拳、走不动，倒下后很难站起来
+PLEXUS_STAM, PLEXUS_TICKS, PLEXUS_REGEN = 3.0, 40, 0.3   # 心窝：喘不上气，多扣 3 倍伤害的体能，2 秒内体能回复只剩三成；不会打倒人
+# 满状态的抗击打线（定在：属性相同、满状态挨一记反击后手勾拳打中下颌约 25% 倒地）；倒地概率曲线的坡度；冲击不到线的三成不可能倒。
+# 坡度放得比较平：力量、抗击打照样要紧，但强的一方不是一拳必倒，弱的一方也一直有一拳翻盘的机会（爆冷）
+KD_T0, KD_SLOPE, KD_FLOOR = 14.74, 0.25, 0.3
 
 # 心态（气势）：资源池，不判胜负。低了会反应变慢、紧张掉体能、出拳犹豫
 COMP_BASE = 80.0
@@ -207,7 +221,7 @@ TECH_OF_DEF = {M_PARRY: T_PARRY, M_SLIP: T_SLIP, M_DUCK: T_DUCK, M_PULL: T_PULL}
 OBS_BASE = 117 + 2 * N_TECH
 OBS_DIM = OBS_BASE + 29
 HIST = 8
-T_MAX = N_ROUNDS * ROUND_TICKS
+T_MAX = N_ROUNDS * (ROUND_TICKS + LIVER_DELAY[1] + DOWN_TICKS)     # 铃声不救人：回合末的肝区延迟和读秒都要走完
 
 
 def _ticks(base, speed):
@@ -231,10 +245,25 @@ def ray_to_rope(pos, ang):
 def zone_probs(typ, def_posture, def_tired, skill, glance):
     """一记干净打中头部的拳落在 下颌 / 头侧 / 额头面门 的概率，形状 (..., 3)。"""
     base = ZONE_BASE[typ]
-    jaw = base[..., 0] * JAW_POSTURE[def_posture] * np.where(def_tired, JAW_TIRED, 1.0) * (1.0 + JAW_SKILL * (skill - 0.5))
+    jaw = base[..., 0] * JAW_POSTURE[def_posture] * np.where(def_tired, JAW_TIRED, 1.0) * (1.0 + AIM_SKILL * (skill - 0.5))
     jaw = np.where(glance, 0.0, np.clip(jaw, 0.0, 0.95))          # 射程边缘擦到的打不到下颌
     side = base[..., 1] * (1.0 - jaw) / (base[..., 1] + base[..., 2])
     return np.stack([jaw, side, 1.0 - jaw - side], -1)
+
+
+def body_zone_probs(typ, right_hand, def_southpaw, def_tired, skill, glance):
+    """一记干净打中身体的拳落在 肝区 / 心窝 / 其他 的概率，形状 (..., 3)。right_hand：这一拳是不是右手打的。"""
+    base = BODY_ZONE_BASE[typ, np.asarray(right_hand).astype(np.int64)]
+    liver = (base[..., 0] * np.where(def_southpaw & (typ == 0), LIVER_SOUTHPAW, 1.0) * np.where(def_tired, LIVER_TIRED, 1.0)
+             * (1.0 + AIM_SKILL * (skill - 0.5)))
+    liver = np.where(glance, 0.0, np.clip(liver, 0.0, 0.95))
+    plexus = base[..., 1] * (1.0 - liver) / (base[..., 1] + base[..., 2])
+    return np.stack([liver, plexus, 1.0 - liver - plexus], -1)
+
+
+def liver_threshold(body, hp):
+    """肝区抗击打线：身体伤（打身体的累积）越重、本场累计伤害越重，线越低。"""
+    return LIVER_T0 * (1.0 - LIVER_BODY * np.clip(body / BODY_KD, 0, 1)) * (0.6 + 0.4 * np.clip(hp / HP_MAX, 0, 1))
 
 
 def impact_of(dealt, typ, zone, unseen):
@@ -298,7 +327,7 @@ def lapse(actions, mask, sim, rng):
 class Sim:
     def __init__(self, n, bodies, seed=0, auto_reset=True, n_rounds=N_ROUNDS, skills=None, form_sd=0.0):
         self.n, self.bodies, self.auto_reset, self.n_rounds = n, bodies, auto_reset, n_rounds
-        self.t_max = n_rounds * ROUND_TICKS
+        self.t_max = n_rounds * (ROUND_TICKS + LIVER_DELAY[1] + DOWN_TICKS)
         self.rng = np.random.default_rng(seed)
         b0, b1 = bodies
         pick = lambda k: np.array([getattr(b0, k), getattr(b1, k)], dtype=np.float64)
@@ -349,6 +378,7 @@ class Sim:
         self.init = z(6)                # 初始距离、y 偏移、开场朝向扰动、双方当天状态、这场的运气种子
         self.luck_seed, self.tick = z(dt=np.int64), z(dt=np.int64)
         self.su_cur, self.kd_sev = z(2, dt=np.int64), z(2)
+        self.liver_t, self.winded_t = z(2, dt=np.int64), z(2, dt=np.int64)      # 肝区击倒倒计时（弯腰中）、心窝喘不上气
         self.hist = np.zeros((HIST, n, 2, 17))
         self.ptr = 0
         self.reset(np.ones(n, bool))
@@ -397,6 +427,7 @@ class Sim:
         self.luck_seed[mask] = init[:, 5].astype(np.int64)
         self.tick[mask] = 0
         self.su_cur[mask], self.kd_sev[mask] = 0, 0.0
+        self.liver_t[mask], self.winded_t[mask] = 0, 0
         gap, yo, tw = init[:, 0], init[:, 1], init[:, 2]
         self.form[mask] = init[:, 3:5]
         self.posture[mask] = self.posture0
@@ -520,6 +551,9 @@ class Sim:
         comp = self.comp.copy()
         tend_def = self.tend_def.copy()
         su_cur, kd_sev, tick = self.su_cur.copy(), self.kd_sev.copy(), self.tick
+        doubled_t = (self.liver_t > 0)[:, ::-1]      # 对手正弯着腰（肝区击倒的延迟里），手护着肚子
+        liver_fall = self.liver_t == 1               # 延迟到了，这一帧倒下
+        liver_t, winded_t = np.maximum(0, self.liver_t - 1), np.maximum(0, self.winded_t - 1)
         react_def = self.react_now()[:, ::-1]        # [:, i] = i 的对手此刻的反应延迟（判"没看见的拳"用）
         ev_rew = np.zeros((n, 2))
         done = np.zeros(n, bool)
@@ -600,7 +634,7 @@ class Sim:
         gsc = np.where(gtype == 1, gs[None, :, 0] * POSTURE_FX[posture[:, ::-1], FX_GUARD], np.where(gtype == 2, gs[None, :, 1], 1.0))
         gsc = gsc * np.where(tired_t, TIRED_GUARD, 1.0)
         gm = np.where(gm < 1.0, np.clip(1.0 - (1.0 - gm) * gsc, 0.02, 1.0), gm)
-        natural = (gtype == 0) & np.isin(ph_t, (FREE, MOVING)) & ~tired_t
+        natural = (gtype == 0) & np.isin(ph_t, (FREE, MOVING)) & ~tired_t & ~doubled_t
         gm = np.where(natural, NATURAL_GUARD[posture[:, ::-1], cls], gm)
         m = np.where(is_def, EVADE_MULT[np.minimum(mv_t, N_MOVES - 1), cls], gm)
         eff = np.where(np.abs(off_t) > ANG_GUARD, 0.5, 1.0) * np.where(stun_t > STUN_HURT, 0.5, 1.0)
@@ -638,13 +672,29 @@ class Sim:
         thr = kd_threshold(self.stun[:, ::-1], self.hp[:, ::-1])
         flash = head_clean & (luck(self.luck_seed, tick, 2) < kd_prob(impact, thr))          # [:, i] = i 把对手打倒
         flash_sev = np.clip(impact / thr - 1.0, 0.0, 1.0)
+        # 身体：肝区、心窝、其他。这一拳是不是右手：正架的后手、反架的前手
+        body_clean = clean & ~head
+        right = (HAND[p] == 1) == (stance > 0)
+        bz = body_zone_probs(typ, right, stance[:, ::-1] < 0, tired_t, sk_p, glance)
+        bzone = (u_zone >= bz[..., 0]).astype(np.int64) + (u_zone >= bz[..., 0] + bz[..., 1])
+        zone = np.where(body_clean, Z_LIVER + bzone, zone)
+        liver_hit = body_clean & (zone == Z_LIVER)
+        liver_imp = np.where(liver_hit, dealt * LIVER_TYPE_F[typ] * np.where(unseen, UNSEEN_F, 1.0), 0.0)
+        liver_kd = liver_hit & (luck(self.luck_seed, tick, 2) < kd_prob(liver_imp, liver_threshold(self.body[:, ::-1], self.hp[:, ::-1])))
+        liver_kd &= ~doubled_t                                             # 已经在弯腰的不再重复计
+        impact = np.where(liver_hit, liver_imp, impact)
+        delay = LIVER_DELAY[0] + (luck(self.luck_seed, tick, 4) * (LIVER_DELAY[1] - LIVER_DELAY[0] + 1)).astype(np.int64)
+        liver_t = np.where(liver_kd[:, ::-1] & (liver_t == 0), delay, liver_t)
+        plexus_hit = body_clean & (zone == Z_PLEXUS)
+        winded_t = np.where(plexus_hit[:, ::-1], PLEXUS_TICKS, winded_t)
         hp_loss = np.where(head, dealt, 0.7 * dealt)
         stun_add = np.where(head & clean, dealt * STUNK[p] * 1.4 * np.where(counter, COUNTER_STUN, 1.0),
                             np.where(head & blocked, dealt * STUNK[p] * 0.5, 0.0))
         body_add = np.where(~head & landed, dealt * BODYK[p] * BODY_METER * np.where(blocked, 0.3, 1.0), 0.0)
-        stam_loss = np.where(~head & landed, dealt * BODY_STAM, 0.0) + np.where(blocked, DMG[p] * DMG_SCALE * 0.5, 0.0)
+        stam_loss = (np.where(~head & landed, dealt * BODY_STAM, 0.0) + np.where(blocked, DMG[p] * DMG_SCALE * 0.5, 0.0)
+                     + np.where(plexus_hit, dealt * PLEXUS_STAM, 0.0))
         cap_loss = np.where(~head & clean, dealt * 0.4, 0.0)
-        hp = np.maximum(0.0, hp - hp_loss[:, ::-1])          # 体力只是累计伤害，到 0 也不结束比赛
+        hp = np.maximum(0.0, hp - hp_loss[:, ::-1])          # 体力 = 本场累计伤害的反面，到 0 裁判判定无法继续（TKO）
         stun = stun + stun_add[:, ::-1]
         body = body + body_add[:, ::-1]
         stam = stam - stam_loss[:, ::-1]
@@ -720,9 +770,11 @@ class Sim:
         el = np.where(both, 0, el)
 
         # 4) 击倒、TKO
-        kd = ((stun >= STUN_KD) | (body >= BODY_KD) | flash[:, ::-1]) & (ph != DOWN) & ~done[:, None]
+        kd = ((stun >= STUN_KD) | (body >= BODY_KD) | flash[:, ::-1] | liver_fall) & (ph != DOWN) & ~done[:, None]
         if kd.any():
-            kd_sev = np.where(kd, np.where(flash[:, ::-1], flash_sev[:, ::-1], 0.5), kd_sev)    # 累积到线的倒地按中等算
+            # 一拳打倒按越过线多少算；肝区倒地人是清醒的，但疼得很难站起来，按最重算；累积到线的倒地按中等算
+            kd_sev = np.where(kd, np.where(liver_fall, 1.0, np.where(flash[:, ::-1], flash_sev[:, ::-1], 0.5)), kd_sev)
+            liver_t = np.where(kd, 0, liver_t)
             ph = np.where(kd, DOWN, ph)
             tm = np.where(kd, DOWN_TICKS, tm)
             mv = np.where(kd, M_NONE, mv)
@@ -741,10 +793,10 @@ class Sim:
         unans = np.where(got_clean & ~trying & (TGT[att_p] == 0) & (stun > STUN_HURT), unans + 1, unans)
         defended_now = got_blocked | evaded[:, ::-1] | (got_clean & trying)
         unans = np.where(clean | defended_now | (stun < STUN_HURT), 0, unans)
-        # TKO 只由裁判判：受伤后连续挨打不还手、一回合倒三次。体力归零不再结束比赛（体力只是资源池）
-        stop = ((unans >= UNANSWERED_STOP) | (kd_round >= 3)) & ~done[:, None]
-        # 只用于统计：TKO 是怎么判的。2 受伤后连续挨打不还手 3 一回合倒三次（1 血条归零，v9 起没有了）
-        tko_cause = np.where(stop.any(1), np.where((kd_round >= 3).any(1), 3, 2), 0)
+        # TKO：裁判判定不能再打了。体力（累计伤害）归零、受伤后连续挨打不还手、一回合倒三次（联赛保留三次倒地规则）
+        stop = ((hp <= 0) | (unans >= UNANSWERED_STOP) | (kd_round >= 3)) & ~done[:, None]
+        # 只用于统计：TKO 是怎么判的。1 体力归零 2 受伤后连续挨打不还手 3 一回合倒三次
+        tko_cause = np.where(stop.any(1), np.select([(kd_round >= 3).any(1), (unans >= UNANSWERED_STOP).any(1)], [3, 2], 1), 0)
         if stop.any():
             st_env = stop.any(1)
             winner = np.where(st_env, np.where(stop[:, 0] & stop[:, 1], -1, np.where(stop[:, 0], 1, 0)), winner)
@@ -752,7 +804,7 @@ class Sim:
             done |= st_env
 
         # 5) 执行动作
-        free = ph == FREE
+        free = (ph == FREE) & (liver_t == 0)            # 肝区击倒的延迟里弯着腰，什么都做不了
         pa = np.clip(a - PUNCH0, 0, 11)
         is_pa = (a >= PUNCH0) & (a <= RUPPER_B)
         mvp = np.minimum(mv, 11)
@@ -860,7 +912,8 @@ class Sim:
         resting = np.where(ph == STARTUP, 0.0, np.where((guard > 0) | (ph == DEFEND), 0.5, 1.0))
         tense = np.where(comp < COMP_TENSE, 0.8, 1.0)
         regen = self.regen[None, :] * POSTURE_FX[posture, FX_REGEN] * (1.0 + 0.1 * self.form)
-        stam = np.clip(stam + regen * resting * tense * np.where(stun > STUN_HURT, 0.5, 1.0), 0.0, cap)
+        stam = np.clip(stam + regen * resting * tense * np.where(stun > STUN_HURT, 0.5, 1.0)
+                       * np.where(winded_t > 0, PLEXUS_REGEN, 1.0), 0.0, cap)
         cap = np.clip(cap, 0.3 * self.stam_max[None, :], self.stam_max[None, :])
         stun = np.maximum(0.0, stun - STUN_DECAY * np.where(in_cl[:, None], 2.0, 1.0))
         body = np.maximum(0.0, body - BODY_DECAY)
@@ -869,13 +922,18 @@ class Sim:
         t_round = self.t_round + 1
         rnd = self.round.copy()
         judge = self.judge.copy()
-        r_end = (t_round >= ROUND_TICKS) & ~done & ~self.over
+        # 铃声不救人：有人倒地读秒时，回合时间到了也要等读秒数完（ABC 统一规则）
+        r_end = (t_round >= ROUND_TICKS) & ~(ph == DOWN).any(1) & ~(liver_t > 0).any(1) & ~done & ~self.over
         if r_end.any():
             s = np.einsum("jk,nik->nji", JUDGES, tally)            # (n, 3 裁判, 2 人)
             diff = s[:, :, 0] - s[:, :, 1]
             r0 = np.where(diff > 0.5, 10.0, np.where(diff < -0.5, 9.0, 10.0))
             r1 = np.where(diff < -0.5, 10.0, np.where(diff > 0.5, 9.0, 10.0))
-            rs = np.stack([r0, r1], -1) - kd_round[:, None, :] - (holds > HOLDS_WARN)[:, None, :]
+            # 有击倒的回合判给打倒对方的人：倒一次 10-8、倒两次 10-7；双方都倒过的相互抵消，再按出拳判
+            net = (kd_round[:, 1] - kd_round[:, 0])[:, None]                 # >0：0 号打倒对方更多
+            r0 = np.where(net > 0, 10.0, np.where(net < 0, 9.0 + net, r0))
+            r1 = np.where(net < 0, 10.0, np.where(net > 0, 9.0 - net, r1))
+            rs = np.stack([r0, r1], -1) - (holds > HOLDS_WARN)[:, None, :]
             judge = np.where(r_end[:, None, None], judge + rs, judge)
             last = r_end & (rnd >= self.n_rounds - 1)
             votes = np.sign(judge[:, :, 0] - judge[:, :, 1])
@@ -921,6 +979,7 @@ class Sim:
         self.over = self.over | done
         self.comp, self.tend_def = comp, tend_def
         self.su_cur, self.kd_sev, self.tick = su_cur, kd_sev, self.tick + 1
+        self.liver_t, self.winded_t = liver_t, winded_t
         self.posture, self.stance, self.tilt = posture, stance, tilt
 
         outcome = np.where(clean, 1, np.where(blocked, 2, np.where(evaded, 3, np.where(fire, 4, 0))))
@@ -933,7 +992,7 @@ class Sim:
                 # 只用于统计，口径对齐 CompuBox：打在拳套和手臂上的不算命中。被自然站姿削弱的按比例折算
                 # （手本来在脸边，有一部分拳会打在手套上），射程边缘擦到的不算
                 "landed_cb": np.where(clean & ~glance, np.minimum(m, 1.0), 0.0),
-                "zone": zone, "impact": impact, "flash_kd": flash}
+                "zone": zone, "impact": impact, "flash_kd": flash, "liver_kd": liver_kd, "liver_fall": liver_fall}
         self.ptr = (self.ptr + 1) % HIST
         self.hist[self.ptr] = self._snapshot()
         # 读招：对手出了什么拳。真拳在打出那一刻才确认是真的，虚晃在收回那一刻才露馅；再按反应延迟"看见"
