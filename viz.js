@@ -16,9 +16,13 @@ const VIZ = (() => {
   const LOOK = {
     A: { skin: '#e9c29c', hair: 'spiky', hairCol: '#16161c', trunk: '#1f57b8', trunk2: '#f4f4f4', glove: '#2f7de6', cuff: '#f4f4f4', shoe: '#f2f2f2', sock: '#1f57b8', brow: 0.15, nick: '长臂' },
     B: { skin: '#c98d62', hair: 'buzz', hairCol: '#2a1c14', trunk: '#b8351c', trunk2: '#f2c14e', glove: '#d9461f', cuff: '#f2c14e', shoe: '#1d1d22', sock: '#f2f2f2', brow: -0.25, nick: '重拳' },
+    // 第一季正史角色：照合伙人给的立绘配色（characters/）
+    GY: { skin: '#e8c4a2', hair: 'slick', hairCol: '#121216', trunk: '#17161b', trunk2: '#6b45b8', stripe: true, glove: '#1d1c22', cuff: '#efeae0', shoe: '#141417', sock: '#141417', brow: 0.35, smirk: true, accent: '#9a6be0', nick: '黑狐' },
+    LJ: { skin: '#dcb18b', hair: 'shaggy', hairCol: '#0f0c0d', trunk: '#8f1a20', trunk2: '#141214', stripe: true, trim: '#c9a14a', glove: '#a11d24', cuff: '#efeae0', shoe: '#1a1416', sock: '#8f1a20', brow: -0.4, scar: true, accent: '#e0383e', nick: '赤獠' },
     S: { skin: '#d9b08c', hair: 'cap', hairCol: '#555', trunk: '#555b66', trunk2: '#999', glove: '#8a8f99', cuff: '#ddd', shoe: '#333', sock: '#ccc', brow: 0, nick: '陪练' },
   };
   const look = id => LOOK[id] || LOOK.S;
+  const accent = id => { const L = look(id); return L.accent || L.glove; };
   // 体型：按身体参数算
   function build(body) {
     const reach = body ? body.reach : 0.75, mass = body ? body.mass : 72;
@@ -86,6 +90,8 @@ const VIZ = (() => {
       const r = (big ? 1.15 : 1) * B.glove * s;
       c.fillStyle = far ? shade(glove, -0.22) : glove; c.strokeStyle = ink; c.lineWidth = lw;
       c.beginPath(); c.ellipse(X(g[0]), Y(g[1]), r * 1.1, r, 0, 0, Math.PI * 2); c.fill(); c.stroke();
+      c.strokeStyle = far ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.32)'; c.lineWidth = lw * 1.3;     // 皮面高光
+      c.beginPath(); c.ellipse(X(g[0]), Y(g[1]), r * 0.72, r * 0.62, 0, -Math.PI * 0.85, -Math.PI * 0.35); c.stroke(); c.strokeStyle = ink;
       c.fillStyle = L.cuff; c.beginPath(); c.ellipse(X(g[0] - 0.06), Y(g[1]), r * 0.35, r * 0.75, 0, 0, Math.PI * 2); c.fill();
       if (bodyShot) { c.strokeStyle = 'rgba(255,255,255,0.6)'; c.setLineDash([3, 3]); c.beginPath(); c.arc(X(g[0]), Y(g[1]), r * 1.35, 0, Math.PI * 2); c.stroke(); c.setLineDash([]); }
     };
@@ -106,7 +112,13 @@ const VIZ = (() => {
     c.fillStyle = L.trunk; c.strokeStyle = ink;
     c.beginPath(); c.moveTo(X(hip[0] - B.waist * 1.15), Y(hipH + 0.08)); c.lineTo(X(hip[0] + B.waist * 1.15), Y(hipH + 0.08));
     c.lineTo(X(hip[0] + B.waist * 1.3), Y(hipH - 0.2)); c.lineTo(X(hip[0] - B.waist * 1.3), Y(hipH - 0.2)); c.closePath(); c.fill(); c.stroke();
-    c.fillStyle = L.trunk2; c.fillRect(Math.min(X(hip[0] - B.waist * 1.15), X(hip[0] + B.waist * 1.15)), Y(hipH + 0.08), Math.abs(X(hip[0] + B.waist * 1.15) - X(hip[0] - B.waist * 1.15)), 0.035 * s);
+    c.fillStyle = L.stripe ? shade(L.trunk, -0.35) : L.trunk2; c.fillRect(Math.min(X(hip[0] - B.waist * 1.15), X(hip[0] + B.waist * 1.15)), Y(hipH + 0.08), Math.abs(X(hip[0] + B.waist * 1.15) - X(hip[0] - B.waist * 1.15)), 0.035 * s);
+    if (L.stripe) {                 // 短裤外侧的竖条（立绘里的紫条 / 黑金条）
+      c.fillStyle = L.trunk2; c.beginPath();
+      c.moveTo(X(hip[0] + B.waist * 0.78), Y(hipH + 0.045)); c.lineTo(X(hip[0] + B.waist * 1.02), Y(hipH + 0.045));
+      c.lineTo(X(hip[0] + B.waist * 1.18), Y(hipH - 0.2)); c.lineTo(X(hip[0] + B.waist * 0.9), Y(hipH - 0.2)); c.closePath(); c.fill();
+      if (L.trim) { c.strokeStyle = L.trim; c.lineWidth = lw * 0.8; c.beginPath(); c.moveTo(X(hip[0] + B.waist * 0.78), Y(hipH + 0.045)); c.lineTo(X(hip[0] + B.waist * 0.9), Y(hipH - 0.2)); c.stroke(); c.strokeStyle = ink; }
+    }
     // 近侧的腿
     leg(nearIsRear ? feet[1] : feet[0], nearIsRear ? feet[3] : feet[2], false);
     // 头
@@ -131,6 +143,18 @@ const VIZ = (() => {
       c.beginPath(); c.moveTo(hx - dir * r * 0.95, hy - r * 0.1);
       for (let i = 0; i <= 5; i++) { const a = Math.PI + i / 5 * Math.PI; const rr = i % 2 ? r * 1.25 : r * 0.95; c.lineTo(hx + Math.cos(a) * rr * 0.98 * (dir), hy + Math.sin(a) * rr); }
       c.closePath(); c.fill();
+    } else if (L.hair === 'slick') {        // 背头：顶上往后梳、两侧剃短，额前一绺垂下来
+      c.beginPath(); c.moveTo(hx + dir * r * 0.75, hy - r * 0.55);
+      c.quadraticCurveTo(hx + dir * r * 0.2, hy - r * 1.45, hx - dir * r * 0.95, hy - r * 0.75);
+      c.quadraticCurveTo(hx - dir * r * 1.12, hy - r * 0.1, hx - dir * r * 0.8, hy + r * 0.1);
+      c.quadraticCurveTo(hx - dir * r * 0.5, hy - r * 0.55, hx + dir * r * 0.75, hy - r * 0.55); c.fill();
+      c.beginPath(); c.moveTo(hx + dir * r * 0.55, hy - r * 0.62); c.quadraticCurveTo(hx + dir * r * 0.95, hy - r * 0.35, hx + dir * r * 0.78, hy - r * 0.05);
+      c.quadraticCurveTo(hx + dir * r * 0.7, hy - r * 0.35, hx + dir * r * 0.35, hy - r * 0.55); c.fill();
+    } else if (L.hair === 'shaggy') {       // 乱发：一圈参差的发梢，刘海压到眉毛
+      c.beginPath(); c.moveTo(hx - dir * r * 1.0, hy + r * 0.2);
+      const tips = [[-1.15, -0.25], [-1.05, -0.75], [-0.75, -1.25], [-0.25, -1.3], [0.2, -1.38], [0.6, -1.1], [1.05, -0.85], [0.8, -0.55], [1.02, -0.32], [0.62, -0.38], [0.5, -0.2]];
+      for (const [tx, ty] of tips) c.lineTo(hx + dir * r * tx, hy + r * ty);
+      c.lineTo(hx - dir * r * 0.2, hy - r * 0.45); c.lineTo(hx - dir * r * 0.75, hy + r * 0.05); c.closePath(); c.fill();
     } else if (L.hair === 'buzz') {
       c.beginPath(); c.ellipse(hx - dir * r * 0.08, hy - r * 0.35, r * 0.92, r * 0.65, 0, Math.PI, 0); c.fill();
     } else {
@@ -150,6 +174,15 @@ const VIZ = (() => {
     const br = (L.brow || 0) + (face.tilt ? -0.35 : 0) + (face.hurt ? 0.3 : 0);
     c.strokeStyle = ink; c.lineWidth = lw * 1.6;
     c.beginPath(); c.moveTo(ex - dir * r * 0.2, ey - r * 0.25 - br * r * 0.15); c.lineTo(ex + dir * r * 0.22, ey - r * 0.25 + br * r * 0.15); c.stroke();
+    if (L.scar) {                   // 脸上的旧伤疤
+      c.strokeStyle = '#a3262b'; c.lineWidth = lw * 1.1; c.beginPath();
+      c.moveTo(hx + dir * r * 0.32, hy + r * 0.05); c.lineTo(hx + dir * r * 0.62, hy + r * 0.38); c.stroke();
+      c.lineWidth = lw * 0.7; c.beginPath(); c.moveTo(hx + dir * r * 0.4, hy + r * 0.24); c.lineTo(hx + dir * r * 0.52, hy + r * 0.15); c.stroke();
+    }
+    if (L.smirk && !face.hurt) {    // 带着笑意打量对手
+      c.strokeStyle = ink; c.lineWidth = lw; c.beginPath();
+      c.moveTo(hx + dir * r * 0.5, hy + r * 0.5); c.quadraticCurveTo(hx + dir * r * 0.66, hy + r * 0.58, hx + dir * r * 0.84, hy + r * 0.4); c.stroke();
+    }
     // 护齿
     c.fillStyle = L.trunk2; c.beginPath(); c.ellipse(hx + dir * r * 0.72, hy + r * 0.45, r * 0.2, r * 0.1, 0, 0, Math.PI * 2); c.fill();
     if (face.sweat) { c.fillStyle = 'rgba(160,210,255,0.85)'; c.beginPath(); c.ellipse(hx - dir * r * 0.6, hy - r * 0.9, r * 0.1, r * 0.16, 0, 0, Math.PI * 2); c.fill(); }
@@ -449,12 +482,12 @@ const VIZ = (() => {
     for (let k = 0; k < 2; k++) {
       const f = fr.f[k], right = k === 1, bw = w * 0.36, bx = right ? x0 + w - 16 - bw : x0 + 16;
       const L = look(ids[k]);
-      c.fillStyle = L.trunk; c.fillRect(right ? x0 + w - 8 : x0, y0, 8, H);
+      c.fillStyle = L.accent || L.trunk; c.fillRect(right ? x0 + w - 8 : x0, y0, 8, H);
       c.font = `700 ${H * 0.27}px "Microsoft YaHei", system-ui`; c.textAlign = right ? 'right' : 'left'; c.fillStyle = '#fff';
       c.fillText(names[k], right ? bx + bw : bx, y0 + H * 0.34);
       const tags = `${SIM.postures[f[F.post]]}${f[F.st] < 0 ? '·反架' : ''}${sub ? ' · ' + SIM.plans[f[F.plan]] : ''}${f[F.tilt] ? ' · 上头' : ''}`;
       const bar = (yy, v, col, hh) => { c.fillStyle = 'rgba(255,255,255,0.14)'; c.fillRect(bx, yy, bw, hh); c.fillStyle = col; const ww = bw * clamp(v, 0, 1); c.fillRect(right ? bx + bw - ww : bx, yy, ww, hh); };
-      bar(y0 + H * 0.46, f[F.hp] / 100, L.glove, H * 0.16);
+      bar(y0 + H * 0.46, f[F.hp] / 100, L.accent || L.glove, H * 0.16);
       bar(y0 + H * 0.68, f[F.stam], '#cfcac0', H * 0.08);
       bar(y0 + H * 0.82, f[F.comp] / 100, '#86b8ff', H * 0.08);
       c.font = `${H * 0.17}px "Microsoft YaHei"`; c.fillStyle = 'rgba(255,255,255,0.75)'; c.textAlign = right ? 'left' : 'right';
@@ -526,20 +559,20 @@ const VIZ = (() => {
     const local = tOut - s.start;
     if (s.type === 'intro') return drawIntro(c, card, box, local / s.dur, meta);
     if (s.type === 'result') {
-      drawBoutFrame(c, rep, n - 1, box, { ids, labels: ids });
+      drawBoutFrame(c, rep, n - 1, box, { ids, labels: meta.labels || ids });
       hud(c, rep, n - 1, box, names, true);
       return drawResult(c, card, box, local / s.dur, meta);
     }
     if (s.type === 'break') {
       const t = Math.min(n - 1, s.at);
-      drawBoutFrame(c, rep, t, box, { ids, labels: ids });
+      drawBoutFrame(c, rep, t, box, { ids, labels: meta.labels || ids });
       return drawBreak(c, rep, t, box, local / s.dur, meta);
     }
     if (s.type === 'replay') {
       const tf = s.from + local / s.dur * (s.to - s.from);
       const ti = clamp(Math.floor(tf), 0, n - 1);
       const base = rep._cam[ti];
-      drawBoutFrame(c, rep, tf, box, { ids, labels: ids, cam: [base[0], base[1], base[2] * 1.45] });
+      drawBoutFrame(c, rep, tf, box, { ids, labels: meta.labels || ids, cam: [base[0], base[1], base[2] * 1.45] });
       const [x0, y0, w, h] = box;
       c.fillStyle = 'rgba(0,0,0,0.25)'; c.fillRect(x0, y0, w, h);
       c.fillStyle = '#d03b3b'; roundRect(c, x0 + 24, y0 + 24, 120, 40, 6); c.fill();
@@ -547,7 +580,7 @@ const VIZ = (() => {
       return;
     }
     const tf = s.from + local / DT_OUT;
-    const { t } = drawBoutFrame(c, rep, tf, box, { ids, labels: ids });
+    const { t } = drawBoutFrame(c, rep, tf, box, { ids, labels: meta.labels || ids });
     hud(c, rep, t, box, names, true);
     // 回合开始横幅
     const roundStart = [0, ...rep._prep.rounds].filter(r => r <= t).pop();
@@ -575,7 +608,7 @@ const VIZ = (() => {
     // 两边半透明的角色色块
     for (let k = 0; k < 2; k++) {
       const L = look(card.fighters[k]);
-      c.fillStyle = L.trunk + '55'; c.beginPath();
+      c.fillStyle = (L.accent || L.trunk) + '55'; c.beginPath();
       if (k === 0) { c.moveTo(x0, y0); c.lineTo(x0 + w * 0.42, y0); c.lineTo(x0 + w * 0.32, y0 + h); c.lineTo(x0, y0 + h); }
       else { c.moveTo(x0 + w, y0); c.lineTo(x0 + w * 0.58, y0); c.lineTo(x0 + w * 0.68, y0 + h); c.lineTo(x0 + w, y0 + h); }
       c.fill();
@@ -584,8 +617,13 @@ const VIZ = (() => {
     for (let k = 0; k < 2; k++) {
       const id = card.fighters[k], B = build(rep.bodies[k]);
       const sx = k === 0 ? x0 + w * (0.02 + 0.16 * slide) : x0 + w * (0.98 - 0.16 * slide);
-      const pose = { crouch: 0.05, lean: 0.03, twist: 0.3, head: [0, 0], lead: [0.33, B.shH + 0.02], rear: [0.17, B.shH + 0.08], feet: [0.24, -0.2, 0, 0], face: {} };
-      drawBoxer(c, sx, y0 + h * 0.93, s, k === 0 ? 1 : -1, id, rep.bodies[k], pose);
+      if (meta.drawPortrait) {        // 有立绘就用立绘（试播集）
+        const pw = w * 0.3, px = k === 0 ? x0 + w * (-0.06 + 0.08 * slide) : x0 + w * (0.76 - 0.08 * slide);
+        meta.drawPortrait(c, id, px, y0, pw, h, slide);
+      } else {
+        const pose = { crouch: 0.05, lean: 0.03, twist: 0.3, head: [0, 0], lead: [0.33, B.shH + 0.02], rear: [0.17, B.shH + 0.08], feet: [0.24, -0.2, 0, 0], face: {} };
+        drawBoxer(c, sx, y0 + h * 0.93, s, k === 0 ? 1 : -1, id, rep.bodies[k], pose);
+      }
       c.font = `900 ${h * 0.065}px "Microsoft YaHei"`; c.textAlign = k === 0 ? 'left' : 'right'; c.fillStyle = '#fff';
       c.fillText(meta.names[k], k === 0 ? x0 + w * 0.03 : x0 + w * 0.97, y0 + h * 0.12);
     }
@@ -620,8 +658,8 @@ const VIZ = (() => {
     rows.forEach((r, i) => {
       const yy = by + bh * (0.47 + i * 0.13);
       c.textAlign = 'center'; c.fillStyle = 'rgba(255,255,255,0.65)'; c.font = `${bh * 0.07}px "Microsoft YaHei"`; c.fillText(r[0], x0 + w / 2, yy);
-      c.font = `800 ${bh * 0.09}px system-ui`; c.fillStyle = look(rep.bodies[0].id).glove; c.textAlign = 'left'; c.fillText(String(r[1]), bx + bw * 0.08, yy);
-      c.fillStyle = look(rep.bodies[1].id).glove; c.textAlign = 'right'; c.fillText(String(r[2]), bx + bw * 0.92, yy);
+      c.font = `800 ${bh * 0.09}px system-ui`; c.fillStyle = accent(rep.bodies[0].id); c.textAlign = 'left'; c.fillText(String(r[1]), bx + bw * 0.08, yy);
+      c.fillStyle = accent(rep.bodies[1].id); c.textAlign = 'right'; c.fillText(String(r[2]), bx + bw * 0.92, yy);
     });
     c.globalAlpha = 1;
   }
@@ -950,6 +988,6 @@ const VIZ = (() => {
     return ev;
   }
 
-  return { fightAudio, trainingAudio, drawTraining, guardPose, punchPose, F, PH, LOOK, look, build, drawBoxer, drawHead, prep, poseAt, drawBoutFrame, makeCam, drawArena, hud, caption, banner, timeline, segAt, renderFight, setSim: s => { SIM = s; }, ease, easeOut, lerp, clamp, shade, mixHex, hash };
+  return { accent, tickEvents, fightAudio, trainingAudio, drawTraining, guardPose, punchPose, F, PH, LOOK, look, build, drawBoxer, drawHead, prep, poseAt, drawBoutFrame, makeCam, drawArena, hud, caption, banner, timeline, segAt, renderFight, setSim: s => { SIM = s; }, ease, easeOut, lerp, clamp, shade, mixHex, hash };
 })();
 if (typeof window !== 'undefined') window.VIZ = VIZ;

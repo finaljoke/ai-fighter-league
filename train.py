@@ -60,6 +60,8 @@ def main():
     ap.add_argument("--bodies", default="A,B")
     # 成长档案（正史训练用）：每个存档节点录几场两人对打的完整回放，训练里第一次打中、第一次击倒之类的里程碑也记下来
     ap.add_argument("--record", type=int, default=0)
+    # 教练启蒙：前 N 轮每场都由标准陪练（打法写死的教练）控制一方，另一方跟着学会接近、出拳，之后再互相对练
+    ap.add_argument("--coach-iters", type=int, default=0)
     ap.add_argument("--floor-frac", type=float, default=0.0)
     ap.add_argument("--floor-lo", type=float, default=0.2)
     ap.add_argument("--floor-hi", type=float, default=0.6)
@@ -97,7 +99,8 @@ def main():
     pool = [[], []]
     vs_pool = [[], []]             # vs_pool[side][k] = [赢, 场]：side 的当前版本打对方第 k 个历史版本
     pool_share = np.array([0.25, 0.25])
-    ctrl = np.full((N, 2), -1)     # -1 = 正在学的当前版本，>=0 = 历史版本编号
+    ctrl = np.full((N, 2), -1)     # -1 = 正在学的当前版本，>=0 = 历史版本编号，-2 = 陪练教练（启蒙期）
+    coach_phase = [args.coach_iters > 0]
     total_ticks = 0
     bot = BoxingSparring() if box else SparringBot()
     # 熟练度（只有拳击版）：天赋是起点，常用、用成功的技术越练越熟，不用的慢慢退回天赋
@@ -144,6 +147,9 @@ def main():
         if not idx.size:
             return
         ctrl[idx] = -1
+        if coach_phase[0]:              # 启蒙期：一方是教练
+            ctrl[idx, rng.integers(0, 2, idx.size)] = -2
+            return
         if not pool[0]:
             return
         u = rng.random(idx.size)
@@ -176,6 +182,8 @@ def main():
     obs = sim.observe()
     t0 = time.time()
     for it in range(1, args.iters + 1):
+        if coach_phase[0] and it > args.coach_iters:
+            coach_phase[0] = False      # 启蒙结束：之后打完的场次换成互相对练
         B_obs = np.zeros((T, N, 2, S.OBS_DIM), np.float32)
         B_act = np.zeros((T, N, 2), np.int64)
         B_lp = np.zeros((T, N, 2), np.float32)
@@ -202,6 +210,9 @@ def main():
                 for k in np.unique(c[c >= 0]):
                     sel = c == k
                     a[sel] = pool[side][k].act(obs[sel, side], rng, msk[sel] if box else None)
+                sel = c == -2
+                if sel.any():
+                    a[sel] = bot.act(obs[sel, side], rng, msk[sel] if box else None)
                 acts[:, side] = a
                 B_lp[t, :, side], B_val[t, :, side] = lp, v
             if box:
@@ -210,25 +221,25 @@ def main():
             B_obs[t], B_act[t] = obs, acts
             if box:
                 B_mask[t] = amask
-            B_learn[t] = ctrl < 0
+            B_learn[t] = ctrl == -1
             rew, done, info = sim.step(acts)
             rew = rew - args.stall_penalty * (info["gap"] > args.stall_gap)[:, None]
             rew = rew - args.draw_penalty * (done & (info["winner"] < 0))[:, None]
             total_ticks += N
             B_rew[t], B_done[t], B_acted[t] = rew, done, info["acted"]
-            main = (ctrl < 0).all(1)
+            main = (ctrl == -1).all(1)
             res["gap"].append(info["gap"][main].mean() if main.any() else np.nan)
             res["starts"] += (info["started"][main] > 0).sum(0)
             res["main_n"] += int(main.sum())
             for side in (0, 1):                 # 记录对历史版本的战绩
-                vsp = done & (ctrl[:, side] < 0) & (ctrl[:, 1 - side] >= 0)
+                vsp = done & (ctrl[:, side] == -1) & (ctrl[:, 1 - side] >= 0)
                 for i in np.flatnonzero(vsp):
                     rec = vs_pool[side][ctrl[i, 1 - side]]
                     rec[0] += int(info["winner"][i] == side)
                     rec[1] += 1
             if box and args.record:
-                note_milestones(run_dir, bodies, info, done, ctrl < 0, firsts, it, total_ticks, fights_done[0])
-                fights_done[0] += int((done & (ctrl < 0).any(1)).sum())
+                note_milestones(run_dir, bodies, info, done, ctrl == -1, firsts, it, total_ticks, fights_done[0])
+                fights_done[0] += int((done & (ctrl == -1).any(1)).sum())
             fin = done & main
             if fin.any():
                 w = info["winner"][fin]
@@ -236,7 +247,7 @@ def main():
                 res["draw"] += int((w == -1).sum()); res["ko"] += int(info["ko"][fin].sum())
                 res["eps"] += int(fin.sum())
             if box:
-                practice_counts(info, acts, ctrl < 0, sim, usage, succ, learn_ticks)
+                practice_counts(info, acts, ctrl == -1, sim, usage, succ, learn_ticks)
             assign(done)
             new_floors(done)
             obs = sim.observe()

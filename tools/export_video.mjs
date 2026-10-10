@@ -25,6 +25,8 @@ page.on('pageerror', e => { console.error('[页面错误]', e.message); process.
 await page.setViewport({ width: 640, height: 480 });
 await page.goto(pathToFileURL(path.resolve(page_)).href);
 await page.evaluate(() => document.fonts.ready);
+// 页面里有图片（试播集的立绘）时，等它们加载完再开始导出
+await page.waitForFunction(() => !window.EXPORT.ready || window.EXPORT.ready(), { timeout: 30000 });
 const all = await page.evaluate(() => EXPORT.items());
 
 const pick = [];

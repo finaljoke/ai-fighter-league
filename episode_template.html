@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 格斗家联赛 · 试播集</title>
+<style>
+  :root { --bg: #07090f; --ink: #f2efe8; --dim: #8d8a83; --gold: #e8b33c; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Microsoft YaHei", system-ui, sans-serif; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 16px; }
+  canvas { width: 100%; aspect-ratio: 16 / 9; display: block; background: #000; border-radius: 6px; }
+  .bar { display: flex; gap: 10px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+  button { background: #1c2030; color: var(--ink); border: 1px solid #2c3246; border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer; }
+  .segs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .segs button.on { background: var(--gold); color: #111; border-color: var(--gold); }
+  .note { color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <canvas id="cv" width="1280" height="720"></canvas>
+  <div class="bar"><button id="play">▶ 播放</button><span id="clock" class="note"></span></div>
+  <div class="segs" id="segs"></div>
+  <p class="note">本片角色、训练与比赛全部由 AI 模拟生成。</p>
+</div>
+<script>/*__VIZ__*/</script>
+<script id="data" type="application/json">/*__DATA__*/null</script>
+<script>
+const EP = JSON.parse(document.getElementById('data').textContent);
+VIZ.setSim(EP.sim);
+const { clamp, lerp, easeOut } = VIZ;
+const ease = x => VIZ.ease(clamp(x, 0, 1));
+const IMG = {};
+window.EPISODE_READY = false;
+Promise.all(Object.entries(EP.portraits).map(([id, src]) => new Promise(res => {
+  const im = new Image(); im.onload = () => { IMG[id] = im; res(); }; im.onerror = res; im.src = src;
+}))).then(() => { window.EPISODE_READY = true; render(); });
+
+const CH = EP.chars;                       // id → 角色卡
+const NAME = id => CH[id].name, NICK = id => CH[id].nick, ACC = id => VIZ.accent(id);
+const FONT = '"Microsoft YaHei", system-ui';
+
+// ---------------------------------------------------------------- 段落
+const SEGS = [];
+SEGS.push({ type: 'title', title: '片头', dur: 6.5 });
+EP.order.forEach(id => SEGS.push({ type: 'profile', id, title: NAME(id), dur: 10 }));
+SEGS.push({ type: 'chapter', title: '第一章', big: '从零学拳', sub: EP.growth_sub, dur: 4.5 });
+EP.growth.forEach((g, i) => { g._rep = VIZ.prep({ frames: g.frames, bodies: g.bodies }); SEGS.push({ type: 'growth', g, i, title: `成长 ${i + 1}`, dur: g.dur }); });
+SEGS.push({ type: 'chapter', title: '第二章', big: '首战', sub: EP.fight_sub, dur: 4.5 });
+const FMETA = { names: EP.fight.fighters.map(NAME), labels: EP.fight.fighters.map(NICK), tale: EP.tale, drawPortrait: (...a) => portrait(...a) };
+SEGS.push({ type: 'fight', title: '首战', dur: VIZ.timeline(EP.fight).total });
+SEGS.push({ type: 'outro', title: '片尾', dur: 10 });
+
+// ---------------------------------------------------------------- 通用画法
+function bg(c, box, tint) {
+  const [x0, y0, w, h] = box;
+  const g = c.createLinearGradient(x0, y0, x0 + w, y0 + h);
+  g.addColorStop(0, '#070910'); g.addColorStop(0.55, '#0d0f18'); g.addColorStop(1, '#14080b');
+  c.fillStyle = g; c.fillRect(x0, y0, w, h);
+  if (tint) {
+    const r = c.createRadialGradient(x0 + w * tint[1], y0 + h * 0.45, 0, x0 + w * tint[1], y0 + h * 0.45, w * 0.6);
+    r.addColorStop(0, tint[0] + '44'); r.addColorStop(1, tint[0] + '00'); c.fillStyle = r; c.fillRect(x0, y0, w, h);
+  }
+  c.strokeStyle = 'rgba(255,255,255,0.035)'; c.lineWidth = 1;         // 细斜纹
+  for (let i = -h; i < w; i += 26) { c.beginPath(); c.moveTo(x0 + i, y0 + h); c.lineTo(x0 + i + h * 0.6, y0); c.stroke(); }
+}
+function vignette(c, box, k = 0.75) {
+  const [x0, y0, w, h] = box;
+  const r = c.createRadialGradient(x0 + w / 2, y0 + h / 2, h * 0.35, x0 + w / 2, y0 + h / 2, w * 0.75);
+  r.addColorStop(0, 'rgba(0,0,0,0)'); r.addColorStop(1, `rgba(0,0,0,${k})`); c.fillStyle = r; c.fillRect(x0, y0, w, h);
+}
+function aiMark(c, box) {
+  const [x0, y0, w, h] = box, s = h / 720;
+  const txt = 'AI 生成 · 角色、训练与比赛均为 AI 模拟';
+  c.font = `600 ${14 * s}px ${FONT}`;
+  const tw = c.measureText(txt).width;
+  c.fillStyle = 'rgba(0,0,0,0.45)'; c.beginPath(); c.roundRect(x0 + w - tw - 34 * s, y0 + h - 38 * s, tw + 22 * s, 26 * s, 13 * s); c.fill();
+  c.fillStyle = 'rgba(255,255,255,0.78)'; c.textAlign = 'left'; c.textBaseline = 'middle';
+  c.fillText(txt, x0 + w - tw - 23 * s, y0 + h - 25 * s); c.textBaseline = 'alphabetic';
+}
+function portrait(c, id, x, y, w, h, alpha = 1) {
+  // 立绘：按框裁切铺满，压暗背景、补主色边光，下沿渐隐
+  const im = IMG[id]; if (!im) return;
+  c.save(); c.globalAlpha = alpha;
+  c.beginPath(); c.rect(x, y, w, h); c.clip();
+  const sc = Math.max(w / im.width, h / im.height), iw = im.width * sc, ih = im.height * sc;
+  c.drawImage(im, x + (w - iw) / 2, y + (h - ih) * 0.15, iw, ih);
+  c.globalCompositeOperation = 'multiply';
+  const g = c.createLinearGradient(x, y, x, y + h); g.addColorStop(0, '#585c68'); g.addColorStop(0.5, '#9a9da6'); g.addColorStop(1, '#30323a');
+  c.fillStyle = g; c.fillRect(x, y, w, h);
+  c.globalCompositeOperation = 'source-over';
+  const rim = c.createLinearGradient(x, y, x + w, y); const acc = ACC(id);
+  rim.addColorStop(0, acc + '55'); rim.addColorStop(0.25, acc + '00'); rim.addColorStop(0.75, acc + '00'); rim.addColorStop(1, acc + '55');
+  c.fillStyle = rim; c.fillRect(x, y, w, h);
+  const fade = c.createLinearGradient(x, y + h * 0.72, x, y + h); fade.addColorStop(0, 'rgba(7,9,15,0)'); fade.addColorStop(1, 'rgba(7,9,15,1)');
+  c.fillStyle = fade; c.fillRect(x, y + h * 0.72, w, h * 0.28);
+  c.restore();
+}
+function wrapText(c, text, x, y, maxW, lh, maxLines = 9) {
+  let line = '', n = 0;
+  for (const ch of text) {
+    if (c.measureText(line + ch).width > maxW && line && !'，。！？、；：）」”'.includes(ch)) { c.fillText(line, x, y + n * lh); line = ch; if (++n >= maxLines) return n; }
+    else line += ch;
+  }
+  if (line) { c.fillText(line, x, y + n * lh); n++; }
+  return n;
+}
+
+// ---------------------------------------------------------------- 片头
+function drawTitle(c, box, t, dur) {
+  const [x0, y0, w, h] = box, s = h / 720, p = t / dur;
+  bg(c, box);
+  // 红黑两道斜切光带
+  const a = ease(p * 2.2);
+  c.save();
+  c.fillStyle = ACC('LJ'); c.globalAlpha = 0.85;
+  c.beginPath(); c.moveTo(x0 - w * 0.2 + a * w * 0.2, y0 + h * 0.62); c.lineTo(x0 + w * 0.62 * a, y0 + h * 0.44); c.lineTo(x0 + w * 0.62 * a, y0 + h * 0.47); c.lineTo(x0 - w * 0.2 + a * w * 0.2, y0 + h * 0.65); c.fill();
+  c.fillStyle = ACC('GY');
+  c.beginPath(); c.moveTo(x0 + w * 1.2 - a * w * 0.2, y0 + h * 0.36); c.lineTo(x0 + w - w * 0.62 * a, y0 + h * 0.54); c.lineTo(x0 + w - w * 0.62 * a, y0 + h * 0.57); c.lineTo(x0 + w * 1.2 - a * w * 0.2, y0 + h * 0.39); c.fill();
+  c.restore();
+  // 立绘剪影：两人左右压角
+  portrait(c, 'LJ', x0 - w * 0.02, y0 + h * 0.05, w * 0.3, h * 1.0, 0.35 * ease((p - 0.1) * 3));
+  portrait(c, 'GY', x0 + w * 0.72, y0 + h * 0.05, w * 0.3, h * 1.0, 0.35 * ease((p - 0.1) * 3));
+  c.textAlign = 'center';
+  c.globalAlpha = ease((p - 0.08) * 4);
+  c.font = `700 ${22 * s}px ${FONT}`; c.fillStyle = 'rgba(255,255,255,0.7)';
+  c.fillText('A I   格 斗 家 联 赛', x0 + w / 2, y0 + h * 0.3);
+  c.globalAlpha = ease((p - 0.2) * 4);
+  c.font = `900 ${118 * s}px ${FONT}`;
+  c.fillStyle = ACC('LJ'); c.fillText('赤', x0 + w / 2 - 120 * s, y0 + h * 0.52);
+  c.fillStyle = '#e9e6ef'; c.fillText('与', x0 + w / 2, y0 + h * 0.52);
+  c.fillStyle = ACC('GY'); c.fillText('黑', x0 + w / 2 + 120 * s, y0 + h * 0.52);
+  c.globalAlpha = ease((p - 0.35) * 4);
+  c.font = `800 ${30 * s}px ${FONT}`; c.fillStyle = 'var(--gold)'; c.fillStyle = '#e8b33c';
+  c.fillText('试 播 集', x0 + w / 2, y0 + h * 0.62);
+  c.font = `${18 * s}px ${FONT}`; c.fillStyle = 'rgba(255,255,255,0.6)';
+  c.fillText('两具赛博肉体，只为武道而生', x0 + w / 2, y0 + h * 0.69);
+  c.globalAlpha = 1;
+  vignette(c, box, 0.6);
+}
+
+// ---------------------------------------------------------------- 人物介绍
+function drawProfile(c, box, t, dur, id) {
+  const [x0, y0, w, h] = box, s = h / 720, p = t / dur, ch = CH[id], acc = ACC(id);
+  const left = EP.order.indexOf(id) === 0;                // 第一位立绘在左，第二位在右
+  bg(c, box, [acc, left ? 0.25 : 0.75]);
+  const pw = w * 0.36, px = left ? x0 + w * 0.04 : x0 + w * 0.6;
+  const slide = easeOut(clamp(p * 3, 0, 1));
+  portrait(c, id, px + (left ? -1 : 1) * (1 - slide) * w * 0.08, y0, pw, h, slide);
+  const tx = left ? x0 + w * 0.44 : x0 + w * 0.06, tw = w * 0.5;
+  c.textAlign = 'left';
+  const fadeIn = k => clamp((p - k) * 5, 0, 1);
+  c.globalAlpha = fadeIn(0.05);
+  c.font = `700 ${20 * s}px ${FONT}`; c.fillStyle = acc; c.fillText(`${ch.corner} · ${ch.school}`, tx, y0 + h * 0.14);
+  c.font = `900 ${84 * s}px ${FONT}`; c.fillStyle = '#f4f1ea'; c.fillText(ch.name, tx, y0 + h * 0.27);
+  c.font = `900 ${40 * s}px ${FONT}`; c.fillStyle = acc; c.fillText(`「${ch.nick}」`, tx + c.measureText(ch.name).width * 0 + 0, y0 + h * 0.35);
+  c.globalAlpha = fadeIn(0.12);
+  c.font = `${19 * s}px ${FONT}`; c.fillStyle = 'rgba(255,255,255,0.72)';
+  c.fillText(ch.tagline, tx, y0 + h * 0.415);
+  // 属性条（属性预算制：总分相同，长处要用短处换）
+  c.globalAlpha = fadeIn(0.18);
+  const rows = ch.attrs, bx = tx, by = y0 + h * 0.45, bh = 20 * s, bwid = tw * 0.62;
+  rows.forEach(([label, v], i) => {
+    const yy = by + i * bh * 1.2, fill = clamp((p - 0.2 - i * 0.025) * 4, 0, 1) * v / 10;
+    c.font = `${15 * s}px ${FONT}`; c.fillStyle = 'rgba(255,255,255,0.7)'; c.textAlign = 'right'; c.fillText(label, bx + 58 * s, yy + bh * 0.72);
+    c.fillStyle = 'rgba(255,255,255,0.1)'; c.fillRect(bx + 68 * s, yy + bh * 0.25, bwid, bh * 0.55);
+    c.fillStyle = acc; c.fillRect(bx + 68 * s, yy + bh * 0.25, bwid * fill, bh * 0.55);
+    c.textAlign = 'left'; c.fillStyle = '#fff'; c.font = `700 ${14 * s}px ${FONT}`; c.fillText(v.toFixed(1), bx + 74 * s + bwid, yy + bh * 0.72);
+  });
+  c.textAlign = 'left'; c.font = `${13 * s}px ${FONT}`; c.fillStyle = 'rgba(255,255,255,0.45)';
+  c.fillText(`属性总分 ${ch.budget}（同量级人人相同）· ${ch.body}`, bx, by + rows.length * bh * 1.2 + 16 * s);
+  // 性格
+  c.globalAlpha = fadeIn(0.3);
+  c.font = `${16 * s}px ${FONT}`; c.fillStyle = 'rgba(255,255,255,0.8)';
+  wrapText(c, ch.bio, tx, by + rows.length * bh * 1.2 + 52 * s, tw, 24 * s, 2);
+  // 台词：逐字打出
+  const shown = Math.floor(clamp((p - 0.45) / 0.3, 0, 1) * ch.line.length);
+  c.globalAlpha = 1;
+  c.font = `900 ${30 * s}px ${FONT}`; c.fillStyle = '#f4f1ea';
+  c.fillText(shown ? `“${ch.line.slice(0, shown)}${shown < ch.line.length ? '' : '”'}` : '', tx, y0 + h * 0.95);
+  vignette(c, box, 0.5);
+}
+
+// ---------------------------------------------------------------- 章节卡
+function drawChapter(c, box, t, dur, sg) {
+  const [x0, y0, w, h] = box, s = h / 720, p = t / dur;
+  bg(c, box);
+  c.textAlign = 'center';
+  c.globalAlpha = ease(p * 4) * (1 - ease((p - 0.85) * 7));
+  c.font = `700 ${22 * s}px ${FONT}`; c.fillStyle = '#e8b33c'; c.fillText(sg.title, x0 + w / 2, y0 + h * 0.4);
+  c.font = `900 ${76 * s}px ${FONT}`; c.fillStyle = '#f4f1ea'; c.fillText(sg.big, x0 + w / 2, y0 + h * 0.53);
+  c.font = `${19 * s}px ${FONT}`; c.fillStyle = 'rgba(255,255,255,0.65)'; c.fillText(sg.sub, x0 + w / 2, y0 + h * 0.62);
+  c.fillStyle = '#e8b33c'; c.fillRect(x0 + w / 2 - 40 * s * ease(p * 3), y0 + h * 0.435, 80 * s * ease(p * 3), 3 * s);
+  c.globalAlpha = 1; vignette(c, box, 0.6);
+}
+
+// ---------------------------------------------------------------- 成长片段
+function drawGrowth(c, box, t, dur, g, i) {
+  const [x0, y0, w, h] = box, s = h / 720, rep = g._rep, n = rep.frames.length;
+  const tf = Math.min(n - 1, g.from + t * 20 * g.speed);
+  const ids = g.bodies.map(b => b.id);
+  const { t: ti } = VIZ.drawBoutFrame(c, rep, tf, box, { ids, labels: ids.map(NICK) });
+  VIZ.hud(c, rep, ti, box, ids.map(NAME), false);
+  // 左上：成长节点
+  const p = t / dur;
+  c.fillStyle = 'rgba(6,8,14,0.82)'; c.beginPath(); c.roundRect(x0 + 18 * s, y0 + 78 * s, 330 * s, 96 * s, 10 * s); c.fill();
+  c.fillStyle = '#e8b33c'; c.fillRect(x0 + 18 * s, y0 + 78 * s, 6 * s, 96 * s);
+  c.textAlign = 'left'; c.font = `700 ${15 * s}px ${FONT}`; c.fillStyle = '#e8b33c';
+  c.fillText(`成长记录 ${String(i + 1).padStart(2, '0')} / ${String(EP.growth.length).padStart(2, '0')}`, x0 + 36 * s, y0 + 104 * s);
+  c.font = `900 ${28 * s}px ${FONT}`; c.fillStyle = '#fff'; c.fillText(g.when, x0 + 36 * s, y0 + 140 * s);
+  c.font = `${14 * s}px ${FONT}`; c.fillStyle = 'rgba(255,255,255,0.65)'; c.fillText(g.when_sub, x0 + 36 * s, y0 + 163 * s);
+  if (g.speed !== 1) { c.fillStyle = '#d03b3b'; c.beginPath(); c.roundRect(x0 + w - 150 * s, y0 + 78 * s, 130 * s, 34 * s, 6 * s); c.fill(); c.fillStyle = '#fff'; c.font = `800 ${16 * s}px ${FONT}`; c.textAlign = 'center'; c.fillText(g.speed < 1 ? '慢 镜' : `${g.speed} 倍速`, x0 + w - 85 * s, y0 + 101 * s); }
+  // 下方：这一阶段在学什么 / 里程碑
+  const cap = g.caption;
+  if (cap) VIZ.caption(c, box, cap.text, cap.sub || null, cap.big ? '#ff5a4f' : '#ffd24a', clamp(p * 6, 0, 1) * clamp((1 - p) * 8, 0, 1));
+}
+
+// ---------------------------------------------------------------- 片尾
+function drawOutro(c, box, t, dur) {
+  const [x0, y0, w, h] = box, s = h / 720, p = t / dur, r = EP.fight.result;
+  const win = r.winner, lose = win ? EP.fight.fighters.find(f => f !== win) : null;
+  bg(c, box, win ? [ACC(win), 0.3] : null);
+  if (win) portrait(c, win, x0 + w * 0.05, y0, w * 0.36, h, ease(p * 3));
+  else { portrait(c, EP.order[0], x0 + w * 0.01, y0, w * 0.21, h, ease(p * 3)); portrait(c, EP.order[1], x0 + w * 0.23, y0, w * 0.21, h, ease(p * 3)); }
+  const tx = x0 + w * 0.47;
+  c.textAlign = 'left';
+  c.globalAlpha = ease((p - 0.05) * 4);
+  c.font = `700 ${20 * s}px ${FONT}`; c.fillStyle = '#e8b33c'; c.fillText('首战结果', tx, y0 + h * 0.16);
+  c.font = `900 ${64 * s}px ${FONT}`; c.fillStyle = win ? ACC(win) : '#f4f1ea';
+  c.fillText(win ? `${NAME(win)} 胜` : '平局', tx, y0 + h * 0.28);
+  c.font = `700 ${26 * s}px ${FONT}`; c.fillStyle = '#fff';
+  c.fillText(win ? `${r.method} · ${r.seconds} 秒` : '三位裁判打平', tx, y0 + h * 0.35);
+  c.globalAlpha = ease((p - 0.18) * 4);
+  const st = EP.stats;
+  const rows = [['出拳', st.thrown], ['打中', st.landed], ['打中重拳', st.power], ['击倒对手', st.kd]];
+  const col = (id, k) => tx + (k === 0 ? 150 : 300) * s;
+  c.font = `700 ${16 * s}px ${FONT}`;
+  EP.fight.fighters.forEach((id, k) => { c.fillStyle = ACC(id); c.textAlign = 'right'; c.fillText(NAME(id), col(id, k) + 40 * s, y0 + h * 0.44); });
+  rows.forEach(([lab, v], i) => {
+    const yy = y0 + h * (0.5 + i * 0.055);
+    c.textAlign = 'left'; c.fillStyle = 'rgba(255,255,255,0.6)'; c.font = `${16 * s}px ${FONT}`; c.fillText(lab, tx, yy);
+    c.font = `800 ${20 * s}px ${FONT}`; c.fillStyle = '#fff'; c.textAlign = 'right';
+    v.forEach((x, k) => c.fillText(String(x), col(null, k) + 40 * s, yy));
+  });
+  c.globalAlpha = ease((p - 0.35) * 4);
+  c.textAlign = 'left'; c.font = `${17 * s}px ${FONT}`; c.fillStyle = 'rgba(255,255,255,0.8)';
+  wrapText(c, EP.outro_text, tx, y0 + h * 0.78, w * 0.48, 26 * s, 3);
+  c.globalAlpha = ease((p - 0.6) * 4);
+  c.font = `800 ${20 * s}px ${FONT}`; c.fillStyle = '#e8b33c'; c.fillText(EP.next_text, tx, y0 + h * 0.93);
+  c.globalAlpha = 1; vignette(c, box, 0.5);
+}
+
+// ---------------------------------------------------------------- 分发、播放、导出
+function drawSeg(c, sg, t, box) {
+  if (sg.type === 'title') drawTitle(c, box, t, sg.dur);
+  else if (sg.type === 'profile') drawProfile(c, box, t, sg.dur, sg.id);
+  else if (sg.type === 'chapter') drawChapter(c, box, t, sg.dur, sg);
+  else if (sg.type === 'growth') drawGrowth(c, box, t, sg.dur, sg.g, sg.i);
+  else if (sg.type === 'fight') VIZ.renderFight(c, EP.fight, t, box, FMETA);
+  else if (sg.type === 'outro') drawOutro(c, box, t, sg.dur);
+  aiMark(c, box);
+}
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+let SEL = 0, T = 0, playing = false, lastTs = 0;
+function render() { ctx.clearRect(0, 0, cv.width, cv.height); drawSeg(ctx, SEGS[SEL], T, [0, 0, cv.width, cv.height]);
+  document.getElementById('clock').textContent = `${SEGS[SEL].title} · ${T.toFixed(1)} / ${SEGS[SEL].dur.toFixed(1)} 秒`;
+  [...document.querySelectorAll('#segs button')].forEach((b, i) => b.classList.toggle('on', i === SEL)); }
+function loop(ts) {
+  if (playing) { if (lastTs) T += (ts - lastTs) / 1000; lastTs = ts;
+    if (T >= SEGS[SEL].dur) { if (SEL < SEGS.length - 1) { SEL++; T = 0; } else { playing = false; T = SEGS[SEL].dur - 0.01; } } }
+  render(); requestAnimationFrame(loop);
+}
+document.getElementById('segs').innerHTML = SEGS.map((sg, i) => `<button data-i="${i}">${sg.title}</button>`).join('');
+document.getElementById('segs').onclick = e => { const i = e.target.dataset.i; if (i !== undefined) { SEL = +i; T = 0; } };
+document.getElementById('play').onclick = () => { playing = !playing; lastTs = 0; document.getElementById('play').textContent = playing ? '❚❚ 暂停' : '▶ 播放'; };
+requestAnimationFrame(loop);
+
+function voiceEv(t, text, extra = {}) { return { t, type: 'voice', text, ...extra }; }
+window.EXPORT = {
+  ready: () => window.EPISODE_READY,
+  items: () => SEGS.map((sg, i) => ({ i, type: sg.type === 'fight' ? 'fight' : 'clip', title: sg.title, dur: sg.dur })),
+  frame: (i, t, w, h) => {
+    const oc = window._oc || (window._oc = document.createElement('canvas'));
+    oc.width = w; oc.height = h;
+    const c = oc.getContext('2d'); c.clearRect(0, 0, w, h);
+    drawSeg(c, SEGS[i], t, [0, 0, w, h]);
+    return oc.toDataURL('image/jpeg', 0.92);
+  },
+  audio: (i, from, to) => {
+    const sg = SEGS[i], ev = [];
+    if (sg.type === 'fight') return VIZ.fightAudio(EP.fight, from, to, FMETA);
+    if (sg.type === 'title') {
+      ev.push({ t: 0, type: 'bed', to: sg.dur, kind: 'music', level: 0.55 });
+      ev.push({ t: 0.15, type: 'sting' }); ev.push({ t: 1.3, type: 'swoosh' });
+      ev.push(voiceEv(1.5, 'AI 格斗家联赛，试播集。赤与黑。'));
+    } else if (sg.type === 'profile') {
+      const ch = CH[sg.id];
+      ev.push({ t: 0, type: 'bed', to: sg.dur, kind: 'music', level: 0.4 });
+      ev.push({ t: 0.05, type: 'swoosh' });
+      ev.push(voiceEv(0.6, `${ch.corner}，${ch.name}，绰号${ch.nick}。${ch.school}。`));
+      ev.push(voiceEv(sg.dur * 0.47, ch.line));
+    } else if (sg.type === 'chapter') {
+      ev.push({ t: 0, type: 'bed', to: sg.dur, kind: 'music', level: 0.35 });
+      ev.push({ t: 0.1, type: 'sting' });
+      ev.push(voiceEv(0.6, `${sg.title}，${sg.big}。`));
+    } else if (sg.type === 'growth') {
+      const g = sg.g, rep = g._rep, n = rep.frames.length;
+      ev.push({ t: 0, type: 'bed', to: sg.dur, kind: 'gym', level: 0.5 });
+      ev.push({ t: 0, type: 'bed', to: sg.dur, kind: 'music', level: 0.22 });
+      for (let tt = Math.ceil(g.from); tt < Math.min(n, g.from + sg.dur * 20 * g.speed); tt++) {
+        const tOut = (tt - g.from) / (20 * g.speed);
+        if (tOut >= from && tOut < to) VIZ.tickEvents(rep, tt, tOut, ev, { gym: true, slow: g.speed < 1 });
+      }
+      ev.push(voiceEv(0.3, g.voice));
+    } else if (sg.type === 'outro') {
+      ev.push({ t: 0, type: 'bed', to: sg.dur, kind: 'music', level: 0.5 });
+      ev.push({ t: 0.1, type: 'cheer', level: 0.8 });
+      ev.push(voiceEv(0.8, EP.outro_voice));
+    }
+    return ev.filter(e => e.t >= from - 0.01 && e.t < to);
+  },
+};
+</script>
+</body>
+</html>

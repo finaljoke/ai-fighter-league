@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import subprocess
+import time
 import sys
 import wave
 
@@ -310,13 +311,17 @@ def voice_wav(text, rate):
     key = hashlib.md5(f"{VOICE}|{rate}|{text}".encode("utf-8")).hexdigest()[:16]
     mp3, wav = os.path.join(VOICE_DIR, key + ".mp3"), os.path.join(VOICE_DIR, key + ".wav")
     if not os.path.exists(wav):
-        try:
-            import edge_tts
-            asyncio.run(edge_tts.Communicate(text, VOICE, rate=rate).save(mp3))
-            subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", mp3, "-ac", "1", "-ar", str(SR), wav], check=True)
-        except Exception as e:                                   # 连不上网：只出音效
-            print(f"  解说生成失败（{text}）：{e}", file=sys.stderr)
-            return None
+        import edge_tts
+        for attempt in range(3):                                 # 语音服务偶尔不返回音频，重试几次
+            try:
+                asyncio.run(edge_tts.Communicate(text, VOICE, rate=rate).save(mp3))
+                subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", mp3, "-ac", "1", "-ar", str(SR), wav], check=True)
+                break
+            except Exception as e:                               # 连不上网：只出音效
+                if attempt == 2:
+                    print(f"  解说生成失败（{text}）：{e}", file=sys.stderr)
+                    return None
+                time.sleep(1.5)
     with wave.open(wav, "rb") as w:
         data = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float64) / 32768
     return data
