@@ -16,15 +16,8 @@ import boxing as B
 import boxing_league as BL
 from analyze import load_run
 
-# 角色卡：人设摘自合伙人给的设定（characters/*.txt），这里只放片子里要用的几句
-CHARS = {
-    "LJ": {"corner": "红角", "nick": "赤獠", "tagline": "28 岁 · 前职业拳手，地下擂台最危险的挑战者",
-           "bio": "拒绝打假赛后被陷害禁赛。只要还能站起来就不认输——可他开始享受对手的退缩。",
-           "line": "看着我。别闭眼。", "img": "characters/red1.jpg", "crop": 40},
-    "GY": {"corner": "蓝角", "nick": "黑狐", "tagline": "30 岁 · 职业拳手兼地下拳赛掮客",
-           "bio": "在拳赛后台长大，最擅长看穿人的习惯。拳头、谎言、金钱和人情，在他眼里都是工具。",
-           "line": "你想赢一场。我想决定谁能上场。", "img": "characters/black1.jpg", "crop": 50},
-}
+# 角色卡（人设摘要、台词、立绘位置）放在本地 characters/roster.json：合伙人的素材，不进仓库
+CHARS = json.load(open(os.path.join("characters", "roster.json"), encoding="utf-8"))
 ORDER = ["LJ", "GY"]          # 红角在前
 
 
