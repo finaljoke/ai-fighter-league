@@ -7,7 +7,7 @@
 """
 import numpy as np
 
-SIM_VERSION = "box2d-v11"
+SIM_VERSION = "box2d-v12"
 
 DT = 0.05
 RING = 6.1
@@ -89,10 +89,18 @@ CRAMP_FRAC = 0.55
 # 勾拳、上勾拳是弯臂拳：臂展长只占一部分优势（直拳全吃，勾拳一半，上勾拳 40%），其余按普通臂展 0.75 米算
 REACH_W = np.array([1.0, 0.5, 0.4])
 DMG_SCALE = 0.55
-# 自然站姿：没专门举架、也没在出拳或挨打时，手本来就在脸附近。头部直拳 ×0.7、头部勾拳 ×0.85；低手位没有这层保护
-NATURAL_GUARD = np.ones((4, 6))
-NATURAL_GUARD[[0, 1, 2], 0] = 0.7
-NATURAL_GUARD[[0, 1, 2], 2] = 0.85            # 整体伤害倍率：让比赛能打进后面的回合，KO 靠干净的重拳和反击
+# 默认护架（v12）：没专门举架、也没在出拳或挨打时，手护着脸、肘贴着肋，一部分来拳打在拳套、手肘上，算被挡。
+# 正在出拳、收拳（抬肘出拳的那一下）、累垮了手掉下来、换架势换站架、弯着腰时挡不住。
+# 数字是起点，没有现实统计，用 CompuBox 的结果校准（总命中、刺拳命中、打身体占比）。依据见 docs/调研/
+#                      刺拳  后手直拳 勾拳  上勾拳 身体拳
+NAT_BLOCK = np.array([[0.50, 0.50, 0.30, 0.10, 0.40],     # 标准高位：护脸和中线，挡组合最好；上勾拳用手挡不住
+                      [0.60, 0.20, 0.20, 0.00, 0.20],     # 长架：前手压住对手前手；越过前手的直拳、上勾拳护不住，前侧身体暴露
+                      [0.50, 0.50, 0.50, 0.00, 0.60],     # 低姿抱架：拳贴颊、肘贴身；上勾拳是克星
+                      [0.10, 0.60, 0.30, 0.00, 0.30]])    # 低手位（肩卷）：前肩卸后手直拳，后手接勾拳；怕刺拳
+NAT_BLOCK_DMG = 0.3                       # 打在拳套、手肘上还剩的伤害
+PHILLY_OPEN = 0.5                         # 肩卷对反架对手效果减半（Mayweather 对左撇子会改用常规护架）
+BODY_DIP_EXPOSED = 1.2                    # 出身体拳时屈膝降重心，下巴靠近对手后手：这时头部挨打 ×1.2
+OFF_STANCE_DMG, OFF_STANCE_GLANCE = 0.25, 0.5   # 不在本来站架：伤害 ×(0.75 + 0.25 × 换站架熟练度)，擦到的区间 ×(1.5 − 0.5 × 熟练度)
 BODY_STAM, BODY_METER = 3.0, 2.0      # 身体拳：每点伤害扣多少体能、累积多少身体伤
 COUNTER_DMG, COUNTER_STUN = 1.3, 1.6
 
@@ -181,9 +189,9 @@ SWITCH_TICKS = 4
 #            直拳射程 对手头部直拳 对手勾拳 对手上勾 高位格挡效果 步速 体能回复 下潜窗口 闪躲后仰窗口 刺拳前手勾提速 反应提速
 POSTURE_FX = np.array([
     [1.00,   1.00,      1.00,   1.00,   1.0,       1.00, 1.00,   0,       0,          0,           0],
-    [1.05,   0.85,      1.10,   1.00,   0.9,       1.00, 1.00,   0,       0,          0,           0],
-    [0.95,   0.80,      1.00,   1.25,   1.0,       0.92, 0.95,   1,       0,          0,           0],
-    [1.00,   1.10,      1.10,   1.10,   0.5,       1.00, 1.10,   0,       1,          1,           1],
+    [1.05,   1.00,      1.10,   1.00,   0.9,       1.00, 1.00,   0,       0,          0,           0],
+    [0.95,   1.00,      1.00,   1.25,   1.0,       0.92, 0.95,   1,       0,          0,           0],
+    [1.00,   1.00,      1.00,   1.10,   0.5,       1.00, 1.10,   0,       1,          1,           1],
 ])
 FX_RANGE, FX_VS_STRAIGHT, FX_VS_HOOK, FX_VS_UPPER, FX_GUARD, FX_WALK, FX_REGEN, FX_DUCK, FX_SLIP, FX_QUICK, FX_REACT = range(11)
 # 正反架对位（一正一反）：后手直拳顺着中线进来更远更重，前手勾拳更容易打到，刺拳和对方前手互相干扰
@@ -385,6 +393,7 @@ class Sim:
         self.su_cur, self.kd_sev = z(2, dt=np.int64), z(2)
         self.liver_t, self.winded_t = z(2, dt=np.int64), z(2, dt=np.int64)      # 肝区击倒倒计时（弯腰中）、心窝喘不上气
         self.pivot_heat = z(2)                                                    # 最近轴转的热度（越连续越贵）
+        self.nat_scale = np.ones(2)               # 默认护架的系数（1 = 正常；测试里设成 0，隔离其它机制）
         self.hist = np.zeros((HIST, n, 2, 17))
         self.ptr = 0
         self.reset(np.ones(n, bool))
@@ -630,8 +639,13 @@ class Sim:
         reach_lim = BODY_R + SHOULDER + arm
         head_add = np.where((tgt == 0) & pull_t, PULL_DIST, 0.0)
         in_rng = dist[:, None] + head_add <= reach_lim + 1e-9
+        sw = self.skills[None, :, T_SWITCH]
+        off_st = stance != self.stance0[None, :]                      # 不在本来站架：弱侧打不好
+        off_dmg = np.where(off_st, 1.0 - OFF_STANCE_DMG + OFF_STANCE_DMG * sw, 1.0)
         glance = dist[:, None] + head_add > reach_lim - (self.glance_tab[p, side] * np.where(tilt > 0, TILT_GLANCE, 1.0)
-                                                          * RNG[p] * self.reach[None, :])
+                                                          * RNG[p] * self.reach[None, :]
+                                                          * np.where(off_st, 1.0 + OFF_STANCE_GLANCE * (1.0 - sw), 1.0))
+        dip_t = np.isin(ph_t, (STARTUP, RECOVERY)) & (mv_t < 12) & (TGT[np.minimum(mv_t, 11)] == 1)   # 对手正在出身体拳
         live = fire & ang_ok & (ph_t != DOWN) & (ph_t != CLINCHED) & (ph != CLINCHED)
         reach_ok = live & in_rng
         is_def = ph_t == DEFEND
@@ -644,15 +658,21 @@ class Sim:
         gm = np.where(gm < 1.0, np.clip(1.0 - (1.0 - gm) * gsc, 0.02, 1.0), gm)
         switching_t = (ph_t == MOVING) & np.isin(mv_t, (M_POSTURE, M_STANCE))      # 正在换架势 / 换站架，重心不稳
         natural = (gtype == 0) & np.isin(ph_t, (FREE, MOVING)) & ~tired_t & ~doubled_t & ~switching_t
-        gm = np.where(natural, NATURAL_GUARD[posture[:, ::-1], cls], gm)
         m = np.where(is_def, EVADE_MULT[np.minimum(mv_t, N_MOVES - 1), cls], gm)
         eff = np.where(np.abs(off_t) > ANG_GUARD, 0.5, 1.0) * np.where(stun_t > STUN_HURT, 0.5, 1.0)
         m = np.where(m < 1.0, 1.0 - (1.0 - m) * eff, m)
+        # 默认护架挡没挡住：按防守方的架势、来拳的种类抽签；护架熟练度、被侧面打、被打晃都会降低
+        ncat = np.where(tgt == 1, 4, np.select([p == 0, p == 2, typ == 1], [0, 1, 2], 3))
+        post_d = posture[:, ::-1]
+        p_nat = (NAT_BLOCK[post_d, ncat] * np.where((post_d == P_LOW) & open_st[:, None], PHILLY_OPEN, 1.0)
+                 * np.where(tgt == 1, gs[None, :, 1], gs[None, :, 0]) * eff * self.nat_scale[::-1][None, :])
+        nat_block = natural & (luck(self.luck_seed, tick, 5) < p_nat)
+        m = np.where(nat_block, NAT_BLOCK_DMG, m)
         evaded = reach_ok & is_def & (m <= 1e-6)
         pulled = live & ~in_rng & pull_t & (dist[:, None] <= reach_lim + 1e-9)
         evaded |= pulled
         landed = reach_ok & ~evaded
-        blocked = landed & ~is_def & (gtype > 0) & (m < 0.5)
+        blocked = landed & ~is_def & (((gtype > 0) & (m < 0.5)) | nat_block)
         clean = landed & ~blocked
         cramp = np.where((typ == 0) & (dist[:, None] < self.cramp[None, :]), 0.5, 1.0)
         counter = clean & ((ph_t == STARTUP) | ((ph_t == RECOVERY) & missed[:, ::-1] & (mv_t < 12))
@@ -669,7 +689,8 @@ class Sim:
         openm = np.where(op & ((p == 2) | (p == 3)), OPEN_CROSS_DMG, np.where(op & ((p == 4) | (p == 5)), OPEN_LHOOK_DMG,
                          np.where(op & (p <= 1), OPEN_JAB_DMG, 1.0)))
         base = (base * vs * openm * (1.0 + 0.08 * self.form) * np.where((tilt > 0) & (IS_POWER[p] == 1), TILT_POWER, 1.0)
-                * np.where(switching_t, SWITCH_EXPOSED, 1.0))
+                * np.where(switching_t, SWITCH_EXPOSED, 1.0)
+                * np.where(dip_t & (tgt == 0), BODY_DIP_EXPOSED, 1.0) * off_dmg)
         dealt = np.where(landed, base * m / self.chin[::-1][None, :], 0.0)   # [:, i] = i 打出的
         head = tgt == 0
         # 落点：干净打中头部才抽。冲击和挨打者挨这一下之前的抗击打线比，越过得多越可能倒
@@ -823,7 +844,8 @@ class Sim:
         acted = free | (can_combo & is_pa)
         start_p = (free | can_combo) & is_pa & (stam >= self.cost_tab[pa, side])
         quick = np.isin(pa, (0, 1)) * POSTURE_FX[posture, FX_QUICK].astype(int)      # 低手位：刺拳从下面弹出去更快
-        su = np.maximum(MIN_SU[pa], self.su_tab[pa, side] + (stam < 0.3 * self.stam_max) + (comp < COMP_FREEZE) - quick)
+        slow = (posture == P_LONG) & (IS_POWER[pa] == 1)                            # 长架出重拳要先收前手，有预兆
+        su = np.maximum(MIN_SU[pa], self.su_tab[pa, side] + (stam < 0.3 * self.stam_max) + (comp < COMP_FREEZE) - quick + slow)
         ph = np.where(start_p, STARTUP, ph)
         mv = np.where(start_p, pa, mv)
         tm = np.where(start_p, su, tm)
@@ -1005,8 +1027,7 @@ class Sim:
                 "blocked_by": np.where(blocked, gtype, 0)[:, ::-1], "def_start": np.where(do_def, dcode, -1), "winner": winner, "method": method, "done": done,
                 "ko": done & ((method == M_KO) | (method == M_TKO)), "gap": dist3, "round": rnd,
                 "judges": judge.copy(), "tko_cause": tko_cause,
-                # 只用于统计，口径对齐 CompuBox：打在拳套和手臂上的不算命中。被自然站姿削弱的按比例折算
-                # （手本来在脸边，有一部分拳会打在手套上），射程边缘擦到的不算
+                # 只用于统计，口径对齐 CompuBox：打在拳套、手臂、手肘上的不算命中（举架和默认护架挡住的都算被挡），射程边缘擦到的不算
                 "landed_cb": np.where(clean & ~glance, np.minimum(m, 1.0), 0.0),
                 "zone": zone, "impact": impact, "flash_kd": flash, "liver_kd": liver_kd, "liver_fall": liver_fall,
                 "clinch_start": do_cl}

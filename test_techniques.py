@@ -20,6 +20,7 @@ def make(gap=1.0, th0=0.0, th1=np.pi, x0=None, y=C, n_rounds=1):
     s.pos[0, 0] = [x0, y]
     s.pos[0, 1] = [x0 + gap, y]
     s.th[0] = [th0, th1]
+    s.nat_scale[:] = 0.0          # 默认护架按概率挡拳，会干扰别的机制的测试；专门测它的地方再打开
     s.hist[:] = s._snapshot()[None]
     return s
 
@@ -30,6 +31,7 @@ def make_n(n, gap=1.0, n_rounds=1):
     s.pos[:, 0] = [C - gap / 2, C]
     s.pos[:, 1] = [C + gap / 2, C]
     s.th[:] = [0.0, np.pi]
+    s.nat_scale[:] = 0.0
     s.hist[:] = s._snapshot()[None]
     return s
 
@@ -41,6 +43,20 @@ def run_n(s, a0, ticks, hold1=B.STAY):
         act = np.tile([[a0.get(t, B.STAY), hold1]], (s.n, 1))
         infos.append(s.step(act)[2])
     return infos
+
+
+def nat_rate(post, punch, gap=1.0, n=1200, opp_southpaw=False, hold1=B.STAY, tired=False):
+    s = make_n(n, gap=gap)
+    s.nat_scale[:] = 1.0
+    s.posture[:, 1] = post
+    if opp_southpaw:
+        s.stance[:, 0] = -1.0
+    if tired:
+        s.stam[:, 1] = 0.1 * s.stam_max[1]
+    inf = run_n(s, {0: punch}, ticks=12, hold1=hold1)
+    oc = np.array([i["outcome"][:, 0] for i in inf])
+    reached = (oc == 1) | (oc == 2)
+    return float((oc == 2).sum() / max(1, reached.sum()))
 
 
 def run(s, a0, a1=(), ticks=None, hold1=B.STAY, hold0=B.STAY):
@@ -118,7 +134,7 @@ inf = run(s, {1: B.JAB_H}, {0: B.CROSS_H}, ticks=12)
 d_counter = dealt(inf, 0)
 crossed = sum(i["fired"][0, 1] > 0 for i in inf)
 check("反击拳：打在对手起手上伤害 ×1.3（而且他手在出拳，没有自然站姿的保护），并且打断对方那一拳",
-      abs(d_counter - 1.3 * d_jab_mid / B.NATURAL_GUARD[B.P_STANDARD, 0]) < 1e-6 and crossed == 0 and any(i["counter"][0, 0] for i in inf),
+      abs(d_counter - 1.3 * d_jab_mid) < 1e-6 and crossed == 0 and any(i["counter"][0, 0] for i in inf),
       f"反击 {d_counter:.2f} vs 普通 {d_jab_mid:.2f}，对方后手是否打出 {crossed}")
 
 # 打空更累
@@ -479,16 +495,25 @@ def vs_posture(post, punch, gap, hold1=B.STAY):
     return dealt(run(s, {0: punch}, ticks=14, hold1=hold1))
 
 base_s, base_h, base_u = vs_posture(B.P_STANDARD, B.JAB_H, 1.0), vs_posture(B.P_STANDARD, B.LHOOK_H, 0.7), vs_posture(B.P_STANDARD, B.LUPPER_H, 0.7)
-check("长架：前手撑开，对手的头部直拳打不实（×0.85），但勾拳更容易进来（×1.1）",
-      abs(vs_posture(B.P_LONG, B.JAB_H, 1.0) - 0.85 * base_s) < 1e-6 and abs(vs_posture(B.P_LONG, B.LHOOK_H, 0.7) - 1.1 * base_h) < 1e-6,
-      f"直拳 {vs_posture(B.P_LONG, B.JAB_H, 1.0):.2f}/{base_s:.2f}，勾拳 {vs_posture(B.P_LONG, B.LHOOK_H, 0.7):.2f}/{base_h:.2f}")
+r_lj, r_lc = nat_rate(B.P_LONG, B.JAB_H), nat_rate(B.P_LONG, B.CROSS_H)
+check("长架：伸出的前手压住对手前手，对手刺拳约六成打在前手上；越过前手的后手直拳只挡两成；勾拳更容易进来（×1.1）",
+      abs(r_lj - 0.6) < 0.05 and abs(r_lc - 0.2) < 0.05 and abs(vs_posture(B.P_LONG, B.LHOOK_H, 0.7) - 1.1 * base_h) < 1e-6,
+      f"刺拳被挡 {r_lj:.0%}，后手直拳被挡 {r_lc:.0%}，勾拳 {vs_posture(B.P_LONG, B.LHOOK_H, 0.7):.2f}/{base_h:.2f}")
+s = make(3.0)
+s.posture[0, 0] = B.P_LONG
+s.step(np.array([[B.CROSS_H, B.STAY]]))
+su_long = int(s.timer[0, 0])
+s = make(3.0)
+s.step(np.array([[B.CROSS_H, B.STAY]]))
+check("长架：出重拳要先收前手，起手慢 1 帧（有预兆）", su_long == int(s.timer[0, 0]) + 1, f"后手直拳起手 标准 {int(s.timer[0, 0])} 帧，长架 {su_long} 帧")
 s = make(1.0)
 s.posture[0, 0] = B.P_LONG
 check("长架：自己的直拳射程更远", s.rng_tab[0, 0] < B.BODY_R + B.SHOULDER + (s.rng_tab[0, 0] - B.BODY_R - B.SHOULDER) * B.POSTURE_FX[B.P_LONG, B.FX_RANGE],
       f"射程 ×{B.POSTURE_FX[B.P_LONG, B.FX_RANGE]}")
-check("低姿抱架：目标变小，头部直拳 ×0.8；但撞上上勾拳 ×1.25",
-      abs(vs_posture(B.P_CROUCH, B.JAB_H, 1.0) - 0.8 * base_s) < 1e-6 and abs(vs_posture(B.P_CROUCH, B.LUPPER_H, 0.7) - 1.25 * base_u) < 1e-6,
-      f"直拳 {vs_posture(B.P_CROUCH, B.JAB_H, 1.0):.2f}，上勾拳 {vs_posture(B.P_CROUCH, B.LUPPER_H, 0.7):.2f}/{base_u:.2f}")
+r_cj, r_ch, r_cb = nat_rate(B.P_CROUCH, B.JAB_H), nat_rate(B.P_CROUCH, B.LHOOK_H, 0.7), nat_rate(B.P_CROUCH, B.LHOOK_B, 0.7)
+check("低姿抱架：拳贴颊、肘贴身，直拳、勾拳约一半、身体拳约六成打在护架上；但撞上上勾拳 ×1.25",
+      abs(r_cj - 0.5) < 0.05 and abs(r_ch - 0.5) < 0.05 and abs(r_cb - 0.6) < 0.05 and abs(vs_posture(B.P_CROUCH, B.LUPPER_H, 0.7) - 1.25 * base_u) < 1e-6,
+      f"刺拳 {r_cj:.0%}、勾拳 {r_ch:.0%}、身体勾拳 {r_cb:.0%} 被挡；上勾拳 {vs_posture(B.P_CROUCH, B.LUPPER_H, 0.7):.2f}/{base_u:.2f}")
 g_std, g_low = vs_posture(B.P_STANDARD, B.CROSS_H, 1.0, B.GUARD_HIGH), vs_posture(B.P_LOW, B.CROSS_H, 1.0, B.GUARD_HIGH)
 s = make(1.0)
 s.posture[0, 0] = B.P_LOW
@@ -656,12 +681,15 @@ inf2 = run(s, {t: B.JAB_H for t in range(16)}, {t: B.GUARD_HIGH for t in range(4
 second = [int(i["outcome"][0, 0]) for i in inf2 if i["fired"][0, 0]]
 check("刺拳只刺一下：挨了一记刺拳后来得及把架子举起来挡下一记", len(second) == 2 and second[1] == 2, f"两记刺拳结果 {second}（1 打中 2 挡住）")
 
-d_idle, _, _ = punch_vs(B.JAB_H, 1.0)
-s = make(1.0)
-s.posture[0, 1] = B.P_LOW
-d_low_idle = dealt(run(s, {0: B.JAB_H}, ticks=12))
-check("自然站姿：站着不动时手在脸边，头部直拳只吃七成；低手位没有这层保护",
-      d_low_idle > 1.4 * d_idle, f"标准站姿 {d_idle:.2f}，低手位 {d_low_idle:.2f}")
+r_sj, r_sb = nat_rate(B.P_STANDARD, B.JAB_H), nat_rate(B.P_STANDARD, B.JAB_B)
+r_busy, r_tired = nat_rate(B.P_STANDARD, B.JAB_H, hold1=B.JAB_H), nat_rate(B.P_STANDARD, B.JAB_H, tired=True)
+check("默认护架：站着时刺拳约一半打在拳套上、身体拳约四成打在手肘上（都算被挡）；自己正在出拳、累垮了手掉下来时挡不住",
+      abs(r_sj - 0.5) < 0.05 and abs(r_sb - 0.4) < 0.05 and r_busy < 0.05 and r_tired < 0.05,
+      f"刺拳 {r_sj:.0%}、身体刺拳 {r_sb:.0%} 被挡；自己在出拳时 {r_busy:.0%}，累垮时 {r_tired:.0%}")
+r_pj, r_pc, r_pco = nat_rate(B.P_LOW, B.JAB_H), nat_rate(B.P_LOW, B.CROSS_H), nat_rate(B.P_LOW, B.CROSS_H, opp_southpaw=True)
+check("低手位（肩卷）：前肩卸掉约六成后手直拳，刺拳只挡一成；对反架对手效果减半",
+      abs(r_pc - 0.6) < 0.05 and abs(r_pj - 0.1) < 0.04 and abs(r_pco - 0.3) < 0.05,
+      f"后手直拳被卸 {r_pc:.0%}，刺拳被挡 {r_pj:.0%}，对反架时后手直拳 {r_pco:.0%}")
 
 
 # ------------------------------------------------------------------ 体能卡住出拳量
@@ -720,18 +748,21 @@ check("天赋总量相同（含流派加成），只是分布不同", abs(tal[0]
 
 
 # ------------------------------------------------------------------ 统计口径（只统计，不影响比赛）
-def landed_of(posture=B.P_STANDARD, hold1=B.STAY, gap=1.0):
-    s = make(gap)
-    s.posture[0, 1] = posture
-    inf = run(s, {0: B.JAB_H}, ticks=12, hold1=hold1)
-    return [round(float(i["landed_cb"][0, 0]), 3) for i in inf if i["fired"][0, 0]]
+def landed_of(hold1=B.STAY, gap=1.0, nat=0.0, n=1):
+    s = make_n(n, gap=gap)
+    s.nat_scale[:] = nat
+    inf = run_n(s, {0: B.JAB_H}, ticks=12, hold1=hold1)
+    lw = np.array([i["landed_cb"][:, 0] for i in inf])
+    oc = np.array([i["outcome"][:, 0] for i in inf])
+    return float(lw.sum()), int((oc == 2).sum())
 
 
 edge = float(make().rng_tab[0, 0]) - 0.005
-l_std, l_low, l_guard, l_edge = landed_of(), landed_of(B.P_LOW), landed_of(hold1=B.GUARD_HIGH), landed_of(gap=edge)
-check("统计口径（CompuBox）：刺拳打中站着的人按自然站姿折成 0.7 记命中，低手位算 1 记，打在架子上、射程边缘擦到的不算",
-      l_std == [0.7] and l_low == [1.0] and l_guard == [0.0] and l_edge == [0.0],
-      f"站姿 {l_std}，低手位 {l_low}，举架 {l_guard}，擦到 {l_edge}")
+l_clean, l_guard, l_edge = landed_of(), landed_of(hold1=B.GUARD_HIGH), landed_of(gap=edge)
+l_nat, b_nat = landed_of(nat=1.0, n=400)
+check("统计口径（CompuBox）：干净打中算 1 记；打在举起的架子上、默认护架上，射程边缘擦到的都不算",
+      l_clean == (1.0, 0) and l_guard[0] == 0.0 and l_edge[0] == 0.0 and abs(l_nat + b_nat - 400) < 1e-6 and b_nat > 150,
+      f"干净 {l_clean[0]}，举架 {l_guard[0]}，擦到 {l_edge[0]}；400 拳打站着的人：命中 {l_nat:.0f}、被默认护架挡 {b_nat}")
 
 
 def tko_cause_of(setup, a0, ticks, x0=None):
@@ -936,9 +967,11 @@ d_still = dealt(run(make(1.0), {0: B.JAB_H}, ticks=8))
 d_sw = dealt(run(make(1.0), {0: B.JAB_H}, {0: B.SWITCH_STANCE}, ticks=8))
 d_po = dealt(run(make(1.0), {0: B.JAB_H}, {0: B.CHANGE_POSTURE}, ticks=8))
 c_sw, c_po = one_tick_cost(2.0, B.SWITCH_STANCE), one_tick_cost(2.0, B.CHANGE_POSTURE)
-check("换站架、换架势要花体能；换的那几帧重心不稳、没有自然站姿保护，挨打更重",
-      abs(c_sw - B.STANCE_COST) < 1e-6 and abs(c_po - B.POSTURE_COST) < 1e-6 and d_sw > 1.5 * d_still and d_po > 1.5 * d_still,
-      f"体能 换站架 {c_sw:.1f} / 换架势 {c_po:.1f}；挨一记刺拳 站着 {d_still:.2f}，换站架中 {d_sw:.2f}，换架势中 {d_po:.2f}")
+r_switch = nat_rate(B.P_STANDARD, B.JAB_H, hold1=B.SWITCH_STANCE)
+check("换站架、换架势要花体能；换的那几帧重心不稳（挨打 ×1.3），也没有默认护架",
+      abs(c_sw - B.STANCE_COST) < 1e-6 and abs(c_po - B.POSTURE_COST) < 1e-6 and abs(d_sw - 1.3 * d_still) < 1e-6
+      and abs(d_po - 1.3 * d_still) < 1e-6 and r_switch < 0.05,
+      f"体能 换站架 {c_sw:.1f} / 换架势 {c_po:.1f}；挨一记刺拳 站着 {d_still:.2f}，换站架中 {d_sw:.2f}；换站架时被默认护架挡 {r_switch:.0%}")
 
 s = make(1.1)                                        # 后手直拳够得着，缠抱够不着
 inf = run(s, {0: B.CLINCH}, {3: B.CROSS_H}, ticks=14)
@@ -971,6 +1004,29 @@ def faked_drop(tend):
 
 check("虚晃多了对手就不信：对手越觉得你爱虚晃，被骗时心态掉得越少",
       faked_drop(0.0) > 3.9 and faked_drop(0.8) < 0.3 * faked_drop(0.0), f"对手没防备 {faked_drop(0.0):.1f}，对手看惯了 {faked_drop(0.8):.1f}")
+
+
+# ------------------------------------------------------------------ 护架和身体（v12）
+# 1.18 米：1 号的身体刺拳够不着（打空），0 号的刺拳够得着；0 号的刺拳正好落在 1 号打空收招的时候
+d_head_idle = dealt(run(make(1.18), {2: B.JAB_H}, ticks=10), 0)
+d_head_dip = dealt(run(make(1.18), {2: B.JAB_H}, {0: B.JAB_B}, ticks=10), 0)
+check("打身体要屈膝降重心：出身体拳那一下，自己的头挨打 ×1.2（再加上被反击 ×1.3）",
+      abs(d_head_dip - 1.2 * 1.3 * d_head_idle) < 1e-6, f"站着挨刺拳 {d_head_idle:.2f}，出身体拳时挨刺拳 {d_head_dip:.2f}")
+
+
+def off_stance(sw):
+    s = make(1.0)
+    s.stance[0] = -s.stance0                             # 两人都换了站架：0 号在弱侧，对位仍是同架（排除正反架对位的影响）
+    sk = s.skills.copy()
+    sk[0, B.T_SWITCH] = sw
+    s.set_skills(sk)
+    return dealt(run(s, {0: B.CROSS_H}, ticks=10))
+
+
+d_native = dealt(run(make(1.0), {0: B.CROSS_H}, ticks=10))
+check("弱侧打不好：不在本来站架时出拳伤害打折，练过换站架的打折少",
+      abs(off_stance(0.5) - 0.875 * d_native) < 1e-6 and off_stance(0.0) < off_stance(0.5) < off_stance(1.0) and abs(off_stance(1.0) - d_native) < 1e-6,
+      f"本来站架 {d_native:.2f}；弱侧 换站架熟练度 0 / 0.5 / 1：{off_stance(0.0):.2f} / {off_stance(0.5):.2f} / {off_stance(1.0):.2f}")
 
 
 if __name__ == "__main__":
