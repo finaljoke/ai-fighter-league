@@ -186,7 +186,7 @@ def main():
                 "RNG": B.RNG.tolist(), "TYPE": B.TYPE.tolist(), "TGT": B.TGT.tolist(), "HAND": B.HAND.tolist(),
                 "actions": B.ACTION_NAMES, "phases": B.PHASE_NAMES, "methods": B.METHOD_NAMES,
                 "postures": B.POSTURE_NAMES, "plans": B.PLAN_NAMES, "version": B.SIM_VERSION},
-        "order": ORDER, "chars": chars, "portraits": {c: portrait_uri(c) for c in ORDER},
+        "order": ORDER, "chars": chars, "portraits": {c: portrait_uri(c) for c in ORDER}, "apron": "第 1 季 · 试播集",
         "growth": clips, "growth_sub": f"两具赛博肉体从不会出拳开始，自己和自己打了 {total_fights} 场",
         "fight": {k: v for k, v in card.items() if k != "replay"},
         "fight_sub": f"红角 {nm['LJ']} 对 蓝角 {nm['GY']} · 3 回合", "tale": tale, "stats": st,

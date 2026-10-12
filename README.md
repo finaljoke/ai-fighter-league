@@ -56,7 +56,7 @@ node tools/export_video.mjs runs/episode_pilot.html runs/试播集.mp4 --items a
 |---|---|
 | `career.py` | 角色在两场比赛之间的生活：训练项目、疲劳伤病、睡眠饮食、称重、比赛夜、体检 |
 | `season.py` / `render_season.py` | 跑一个赛季并存档 / 用存档重新生成观看页 |
-| `viz.js` | 转播画面渲染：拳手骨骼与造型、动作、跟拍镜头、擂台、开场卡、回合统计、读秒、慢镜回放、判定、训练场景。观看页和导出视频共用 |
+| `viz.js` | 转播画面渲染：拳手骨骼与造型、动作、多机位导播（整场预先排好机位，两人不叠在一起）、擂台、开场卡、回合统计、读秒、慢镜回放、判定、训练场景。观看页和导出视频共用 |
 | `season_template.html` | 赛季观看页（时间线、比赛、训练场、疲劳曲线） |
 | `tools/export_video.mjs` | 把观看页的画面逐帧导出成 mp4，再配上音轨 |
 | `make_episode.py` + `episode_template.html` | 试播集：片头、人物介绍、成长片段（`train.py --record` 的成长档案和里程碑）、首战（只打一次存档，结果不重来）、片尾。人设和立绘读本地 `characters/`，不进仓库 |

@@ -127,10 +127,11 @@ const VIZ = (() => {
     if (nearIsRear) arm(shRear, rear, pose.rearBig, pose.rearBody, false, L.glove); else arm(shLead, lead, pose.leadBig, pose.leadBody, false, L.glove);
     if (pose.label) {
       c.font = `700 ${Math.max(11, 0.15 * s)}px system-ui, "Microsoft YaHei"`; c.textAlign = 'center';
-      const ly = Y(headC[1] + B.headR * 2.4), lx = X(headC[0]) + (pose.labelDx || 0);
+      const ly = Y(headC[1] + B.headR * 2.4), lx = X(headC[0]);
       c.fillStyle = 'rgba(0,0,0,0.45)'; c.fillText(pose.label, lx + 1, ly + 1);
       c.fillStyle = '#ffffff'; c.fillText(pose.label, lx, ly);
     }
+    return { hx: X(headC[0]), hy: Y(headC[1]), hr: B.headR * s };
   }
 
   function drawHead(c, hx, hy, r, dir, L, face, lw, flash) {
@@ -204,6 +205,7 @@ const VIZ = (() => {
     tube(c, [[X(shx), Y(shy)], [X(shx + 0.25), Y(shy + 0.15 - 0.2 * d)]], B.limb * s, L.skin, ink, lw);
     c.fillStyle = L.glove; c.beginPath(); c.arc(X(shx + 0.25), Y(shy + 0.15 - 0.2 * d), B.glove * s, 0, Math.PI * 2); c.fill(); c.stroke();
     drawHead(c, X(hx), Y(hy), B.headR * s, dir, L, { hurt: true }, lw);
+    return { hx: X(hx), hy: Y(hy), hr: B.headR * s };
   }
 
   function shade(hex, k) { return mixHex(hex, k < 0 ? '#000000' : '#ffffff', Math.abs(k)); }
@@ -338,38 +340,101 @@ const VIZ = (() => {
     return pose;
   }
 
-  // ---------------------------------------------------------------- 转播镜头：跟拍、按两人距离推拉（整场预先算好，平滑）
+  // ---------------------------------------------------------------- 转播镜头：四个机位、跟拍、按两人距离推拉（整场预先算好，平滑）
+  // 机位 rot = 0~3：绕擂台中心每次转 90°。世界俯视坐标 (x, y) → 机位坐标 (u 横向, v 纵深，越大越远)
+  function toCam(rot, x, y) {
+    const m = SIM.RING / 2, dx = x - m, dy = y - m;
+    return rot === 1 ? [m - dy, m + dx] : rot === 2 ? [m - dx, m - dy] : rot === 3 ? [m + dy, m - dx] : [x, y];
+  }
+  // 这个机位下两人好不好看：连线越接近横向越好（不叠在一起），红角在左再加一点
+  function camQuality(rot, f) {
+    const a = toCam(rot, f[0][F.x], f[0][F.y]), b = toCam(rot, f[1][F.x], f[1][F.y]);
+    const du = b[0] - a[0], d = Math.hypot(du, b[1] - a[1]) || 1;
+    return Math.abs(du) / d + (du > 0 ? 0.25 : 0);
+  }
+  function bestRot(rep, from, to) {
+    const sum = [0, 0, 0, 0];
+    for (let t = from; t <= to; t++) for (let r = 0; r < 4; r++) sum[r] += camQuality(r, rep.frames[t].f);
+    return sum.indexOf(Math.max(...sum));
+  }
+  // 导播：整场的机位预先排好（比赛是先算完再播的，导播看得到后面）。
+  // 每帧每个机位一个难看分：两人连线越偏纵深越难看（叠在一起最难看），红角在右边扣一点；切一次镜头也有代价。
+  // 用动态规划找总分最低的排法：一个镜头至少 1.5 秒，倒地时和比赛最后 1.5 秒不切，出拳当中切多付一点。
+  const DIRECT = { minShot: 30, cut: 15, busyCut: 6, overlap: 1.5, flip: 0.05 };
+  function directCams(rep) {
+    const fr = rep.frames, n = fr.length, S = DIRECT.minShot + 1, NS = 4 * S;
+    const roundStart = new Set(rep._prep.rounds);
+    const tickCost = (r, f) => {
+      const a = toCam(r, f[0][F.x], f[0][F.y]), b = toCam(r, f[1][F.x], f[1][F.y]);
+      const du = b[0] - a[0], d = Math.hypot(du, b[1] - a[1]), flip = du < 0 ? DIRECT.flip : 0;
+      return d < 0.4 ? flip : DIRECT.overlap * (1 - Math.abs(du) / d) ** 2 + flip;      // 贴身缠抱时哪个机位都差不多
+    };
+    // 状态 = 机位 r × 这个镜头已经持续的帧数 s（到 minShot 封顶）
+    let cost = new Float64Array(NS).fill(Infinity), next = new Float64Array(NS);
+    const from = new Int16Array(n * NS);
+    for (let r = 0; r < 4; r++) cost[r * S] = tickCost(r, fr[0].f);
+    for (let t = 1; t < n; t++) {
+      const f = fr[t].f;
+      next.fill(Infinity);
+      const tc = [0, 1, 2, 3].map(r => tickCost(r, f));
+      const canCut = t < n - S && !f.some(x => x[F.ph] === PH.DOWN);
+      const busy = f.some(x => x[F.ph] === PH.STARTUP || x[F.ph] === PH.HITSTUN || (x[F.ph] === PH.RECOVERY && x[F.mv] < 12));
+      const cutCost = roundStart.has(t) ? 0 : DIRECT.cut + (busy ? DIRECT.busyCut : 0);
+      for (let r = 0; r < 4; r++) for (let s = 0; s < S; s++) {
+        const i = r * S + s, c = cost[i];
+        if (c === Infinity) continue;
+        const j = r * S + Math.min(s + 1, S - 1), stay = c + tc[r];
+        if (stay < next[j]) { next[j] = stay; from[t * NS + j] = i; }
+        if (s === S - 1 && canCut) for (let r2 = 0; r2 < 4; r2++) {
+          if (r2 === r) continue;
+          const k = r2 * S, v = c + cutCost + tc[r2];
+          if (v < next[k]) { next[k] = v; from[t * NS + k] = i; }
+        }
+      }
+      [cost, next] = [next, cost];
+    }
+    const rots = new Int8Array(n);
+    let i = cost.indexOf(Math.min(...cost));
+    for (let t = n - 1; t >= 0; t--) { rots[t] = Math.floor(i / S); if (t) i = from[t * NS + i]; }
+    return rots;
+  }
   function cameraPath(rep) {
-    const n = rep.frames.length, out = [];
+    const n = rep.frames.length, out = [], rots = directCams(rep);
     let cx = SIM.RING / 2, cy = SIM.RING / 2, zoom = 1.0;
     for (let t = 0; t < n; t++) {
-      const f = rep.frames[t].f;
+      const f = rep.frames[t].f, rot = rots[t], cut = t > 0 && rot !== rots[t - 1];
+      const a = toCam(rot, f[0][F.x], f[0][F.y]), b = toCam(rot, f[1][F.x], f[1][F.y]);
       const mx = (f[0][F.x] + f[1][F.x]) / 2, my = (f[0][F.y] + f[1][F.y]) / 2;
-      const spread = Math.abs(f[0][F.x] - f[1][F.x]) + 0.5 * Math.abs(f[0][F.y] - f[1][F.y]);
+      const spread = Math.abs(a[0] - b[0]) + 0.5 * Math.abs(a[1] - b[1]);
       const z = clamp(2.2 / (spread + 1.4), 0.85, 1.2);
       const kd = f[0][F.ph] === PH.DOWN || f[1][F.ph] === PH.DOWN;
-      cx = lerp(cx, mx, 0.06); cy = lerp(cy, my, 0.05); zoom = lerp(zoom, kd ? z * 1.15 : z, 0.04);
-      out.push([cx, cy, zoom]);
+      if (t === 0 || cut) { cx = mx; cy = my; zoom = kd ? z * 1.15 : z; }               // 切镜头是硬切，新机位直接对好
+      else { cx = lerp(cx, mx, 0.06); cy = lerp(cy, my, 0.06); zoom = lerp(zoom, kd ? z * 1.15 : z, 0.04); }
+      out.push([cx, cy, zoom, rot]);
     }
     return out;
   }
-  // 世界 (x, y, z) → 屏幕。y 越大越远（俯视坐标），z 是离台面的高度
+  // 两帧之间插值；跨了切镜头就不插
+  const lerpCam = (p, q, a) => p[3] !== q[3] ? p : [lerp(p[0], q[0], a), lerp(p[1], q[1], a), lerp(p[2], q[2], a), p[3]];
+  // 世界 (x, y, z) → 屏幕：P 收世界坐标，Pc 收机位坐标（画擂台用，擂台是正方形，四个机位看过去一样）。z 是离台面的高度
   function makeCam(box, cam) {
-    const [x0, y0, w, h] = box, [cx, cy, zoom] = cam;
+    const [x0, y0, w, h] = box, [cx, cy, zoom] = cam, rot = cam[3] || 0, R = SIM.RING;
     const base = Math.min(h / 3.3, w / 5.2) * zoom;                     // 人物身高大约占画面一半
-    return {
-      base,
-      P: (x, y, z = 0) => {
-        const t = clamp((y - cy) / SIM.RING + 0.5, -0.5, 1.5);          // 相对镜头中心的深度：0 近、1 远
-        const sc = base * (1.1 - 0.25 * t);
-        const floorY = y0 + h * lerp(0.95, 0.6, t);
-        return [x0 + w / 2 + (x - cx) * sc, floorY - z * sc, sc];
-      },
+    let [cu, cv] = toCam(rot, cx, cy);
+    // 镜头不拍出擂台：横向看得到的范围比台面窄时，画面边缘最多露出围绳外 0.5 米
+    const half = w / 2 / (base * 0.975), edge = 0.5;
+    cu = 2 * half >= R + 2 * edge ? R / 2 : clamp(cu, half - edge, R - half + edge);
+    const Pc = (u, v, z = 0) => {
+      const t = clamp((v - cv) / R + 0.5, -0.5, 1.5);                   // 相对镜头中心的深度：0 近、1 远
+      const sc = base * (1.1 - 0.25 * t);
+      const floorY = y0 + h * lerp(0.95, 0.6, t);
+      return [x0 + w / 2 + (u - cu) * sc, floorY - z * sc, sc];
     };
+    return { base, rot, Pc, W: (x, y) => toCam(rot, x, y), P: (x, y, z = 0) => { const [u, v] = toCam(rot, x, y); return Pc(u, v, z); } };
   }
 
   // ---------------------------------------------------------------- 擂台与观众席
-  function drawArena(c, box, cam, tick, flash, gym) {
+  function drawArena(c, box, cam, tick, flash, gym, apron = '第 0 季 · SEASON 0') {
     const [x0, y0, w, h] = box, R = SIM.RING;
     if (gym) return drawGymRing(c, box, cam);
     // 背景与灯光
@@ -380,8 +445,8 @@ const VIZ = (() => {
       lg.addColorStop(0, 'rgba(255,240,210,0.16)'); lg.addColorStop(1, 'rgba(255,240,210,0)'); c.fillStyle = lg; c.fillRect(x0, y0, w, h * 0.8);
     }
     // 观众：几排剪影，镜头移动时有视差
-    const far = cam.P(R / 2, R + 1.6);
-    const off = (cam.P(0, R)[0] - cam.P(R / 2, R)[0]) * 0.15;
+    const far = cam.Pc(R / 2, R + 1.6);
+    const off = (cam.Pc(0, R)[0] - cam.Pc(R / 2, R)[0]) * 0.15;
     for (let row = 0; row < 5; row++) {
       const yy = far[1] - 18 - row * 22, rr = 9 - row * 0.8;
       for (let i = -2; i < 34; i++) {
@@ -394,11 +459,11 @@ const VIZ = (() => {
       }
     }
     // 台面
-    const q = [cam.P(0, 0), cam.P(R, 0), cam.P(R, R), cam.P(0, R)];
+    const q = [cam.Pc(0, 0), cam.Pc(R, 0), cam.Pc(R, R), cam.Pc(0, R)];
     const fg = c.createLinearGradient(0, q[3][1], 0, q[0][1]); fg.addColorStop(0, '#b9b2a0'); fg.addColorStop(1, '#ddd6c3');
     c.fillStyle = fg; c.beginPath(); q.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.closePath(); c.fill();
     // 台面中央标志
-    const ctr = cam.P(R / 2, R / 2);
+    const ctr = cam.Pc(R / 2, R / 2);
     c.save(); c.translate(ctr[0], ctr[1]); c.scale(1, 0.32);
     c.strokeStyle = 'rgba(140,40,30,0.35)'; c.lineWidth = 6; c.beginPath(); c.arc(0, 0, ctr[2] * 1.1, 0, Math.PI * 2); c.stroke();
     c.fillStyle = 'rgba(140,40,30,0.4)'; c.font = `900 ${ctr[2] * 0.3}px "Microsoft YaHei", system-ui`; c.textAlign = 'center'; c.fillText('AI 格斗家联赛', 0, ctr[2] * 0.18);
@@ -406,22 +471,28 @@ const VIZ = (() => {
     // 台裙
     c.fillStyle = '#7b2620'; c.beginPath(); c.moveTo(q[0][0], q[0][1]); c.lineTo(q[1][0], q[1][1]); c.lineTo(q[1][0], q[1][1] + q[1][2] * 0.35); c.lineTo(q[0][0], q[0][1] + q[0][2] * 0.35); c.closePath(); c.fill();
     c.fillStyle = 'rgba(255,255,255,0.75)'; c.font = `800 ${q[0][2] * 0.12}px "Microsoft YaHei"`; c.textAlign = 'center';
-    c.fillText('第 0 季 · SEASON 0', (q[0][0] + q[1][0]) / 2, q[0][1] + q[0][2] * 0.24);
+    c.fillText(apron, (q[0][0] + q[1][0]) / 2, q[0][1] + q[0][2] * 0.24);
     ropes(c, cam, 'far');
     return () => ropes(c, cam, 'near');
   }
+  // 角柱颜色跟着世界坐标走：红角在 (0, 0)、蓝角在 (R, R)，换机位时颜色跟着转
+  function postColor(rot, u, v) {
+    const R = SIM.RING, [x, y] = toCam((4 - rot) % 4, u, v);
+    return x < R / 2 && y < R / 2 ? '#d03b3b' : x > R / 2 && y > R / 2 ? '#2a78d6' : '#f4f4f4';
+  }
   function ropes(c, cam, which) {
     const R = SIM.RING;
-    const posts = which === 'far' ? [[0, R, '#f4f4f4'], [R, R, '#2a78d6']] : [[0, 0, '#d03b3b'], [R, 0, '#f4f4f4']];
-    for (const [x, y, col] of posts) {
-      const a = cam.P(x, y), b = cam.P(x, y, 1.35);
+    const posts = which === 'far' ? [[0, R], [R, R]] : [[0, 0], [R, 0]];
+    for (const [x, y] of posts) {
+      const col = postColor(cam.rot, x, y);
+      const a = cam.Pc(x, y), b = cam.Pc(x, y, 1.35);
       c.strokeStyle = '#2b2f37'; c.lineWidth = Math.max(4, 0.07 * a[2]); c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke();
       c.fillStyle = col; c.fillRect(b[0] - 0.06 * a[2], b[1], 0.12 * a[2], 1.1 * a[2]);
     }
     const strands = [[0.5, '#e8e8e8'], [0.88, '#d03b3b'], [1.25, '#e8e8e8']];
     const lines = which === 'far' ? [[[0, R], [R, R]], [[0, 0], [0, R]], [[R, 0], [R, R]]] : [[[0, 0], [R, 0]]];
     for (const [z, col] of strands) for (const [p0, p1] of lines) {
-      const a = cam.P(p0[0], p0[1], z), b = cam.P(p1[0], p1[1], z);
+      const a = cam.Pc(p0[0], p0[1], z), b = cam.Pc(p1[0], p1[1], z);
       c.strokeStyle = which === 'near' ? col + 'cc' : col; c.lineWidth = Math.max(2, 0.025 * a[2]);
       c.beginPath(); c.moveTo(a[0], a[1]); c.quadraticCurveTo((a[0] + b[0]) / 2, (a[1] + b[1]) / 2 + 0.03 * a[2], b[0], b[1]); c.stroke();
     }
@@ -431,28 +502,33 @@ const VIZ = (() => {
   function drawBoutFrame(c, rep, tf, box, opts = {}) {
     prep(rep);
     const n = rep.frames.length, t = clamp(Math.floor(tf), 0, n - 1), a = tf - Math.floor(tf);
-    const camv = opts.cam || lerp3(rep._cam[t], rep._cam[Math.min(n - 1, t + 1)], a);
+    const camv = opts.cam || lerpCam(rep._cam[t], rep._cam[Math.min(n - 1, t + 1)], a);
     const cam = makeCam(box, camv);
     const P = rep._prep;
     const bigNow = P.events.some(e => e.t <= t && t - e.t < 4 && e.big >= 2);
-    const near = drawArena(c, box, cam, t, bigNow, opts.gym);
+    const near = drawArena(c, box, cam, t, bigNow, opts.gym, opts.apron);
     const fr = rep.frames[t], nx = rep.frames[Math.min(n - 1, t + 1)];
     const pos = [0, 1].map(k => [lerp(fr.f[k][F.x], nx.f[k][F.x], a), lerp(fr.f[k][F.y], nx.f[k][F.y], a)]);
     const ids = opts.ids || [rep.bodies[0].id, rep.bodies[1].id];
-    const order = [0, 1].sort((i, j) => pos[j][1] - pos[i][1]);
+    const order = [0, 1].sort((i, j) => cam.W(...pos[j])[1] - cam.W(...pos[i])[1]);      // 远的先画
+    const tags = [];
     for (const k of order) {
       const [sx, sy, sc] = cam.P(pos[k][0], pos[k][1]);
       const [ox] = cam.P(pos[1 - k][0], pos[1 - k][1]);
-      const dir = Math.abs(ox - sx) > 3 ? Math.sign(ox - sx) : (Math.cos(fr.f[k][F.th]) >= 0 ? 1 : -1);
+      const th = fr.f[k][F.th], [hu] = cam.W(pos[k][0] + Math.cos(th), pos[k][1] + Math.sin(th));
+      let dir = Math.abs(ox - sx) > 3 ? Math.sign(ox - sx) : (hu >= cam.W(...pos[k])[0] ? 1 : -1);
       c.fillStyle = 'rgba(0,0,0,0.28)'; c.beginPath(); c.ellipse(sx, sy, 0.4 * sc, 0.09 * sc, 0, 0, Math.PI * 2); c.fill();
       const pose = poseAt(rep, tf, k);
-      if (opts.labels) pose.label = opts.labels[k];
-      // 贴身时两人名字会叠在一起：各往自己那侧横向让开（往上错会钻进顶栏）
-      if (Math.abs(ox - sx) < 0.9 * sc) pose.labelDx = (sx < ox || (sx === ox && k === 0) ? -1 : 1) * (0.45 * sc - Math.abs(ox - sx) / 2);
-      drawBoxer(c, sx, sy, sc, dir, ids[k], rep.bodies[k], pose, fr.f[k][F.st] < 0 ? -1 : 1);
+      // 仰面倒下时头朝背后（-dir）。背靠围绳时往背后倒会倒出擂台，改成往台里倒
+      if (pose.down > 0.001) {
+        const v = cam.W(...pos[k])[1], headX = sx - dir * 1.2 * sc;
+        if (headX < cam.Pc(0, v)[0] || headX > cam.Pc(SIM.RING, v)[0]) dir = -dir;
+      }
+      const head = drawBoxer(c, sx, sy, sc, dir, ids[k], rep.bodies[k], pose, fr.f[k][F.st] < 0 ? -1 : 1);
+      if (opts.labels) tags.push({ text: opts.labels[k], hx: head.hx, hy: head.hy, hr: head.hr, side: -dir, col: accent(ids[k]) });
     }
     near();
-    // 命中火花和伤害数字
+    // 命中火花（伤害数字只在 opts.dmgNumbers 时画，转播画面不要）
     for (let back = 0; back < 12; back++) {
       const tt = t - back; if (tt < 1) break;
       for (let k = 0; k < 2; k++) {
@@ -465,36 +541,71 @@ const VIZ = (() => {
           c.strokeStyle = f[F.ctr] ? '#ff5a4f' : '#ffe066'; c.lineWidth = 3;
           for (let i = 0; i < 12; i++) { const an = i * Math.PI / 6 + back; const r1 = 0.06 * sc, r2 = (f[F.dmg] >= 5 ? 0.3 : 0.18) * sc * (1 + back * 0.2); c.beginPath(); c.moveTo(px + Math.cos(an) * r1, py + Math.sin(an) * r1); c.lineTo(px + Math.cos(an) * r2, py + Math.sin(an) * r2); c.stroke(); }
         }
-        c.font = `800 ${Math.max(12, 0.17 * sc)}px system-ui`; c.textAlign = 'center';
-        c.fillStyle = 'rgba(0,0,0,0.5)'; c.fillText('−' + f[F.dmg], px + 1, py - (0.35 + back * 0.02) * sc + 1);
-        c.fillStyle = f[F.ctr] ? '#ffb3ad' : '#ffffff'; c.fillText('−' + f[F.dmg], px, py - (0.35 + back * 0.02) * sc);
+        if (opts.dmgNumbers) {
+          c.font = `800 ${Math.max(12, 0.17 * sc)}px system-ui`; c.textAlign = 'center';
+          c.fillStyle = 'rgba(0,0,0,0.5)'; c.fillText('−' + f[F.dmg], px + 1, py - (0.35 + back * 0.02) * sc + 1);
+          c.fillStyle = f[F.ctr] ? '#ffb3ad' : '#ffffff'; c.fillText('−' + f[F.dmg], px, py - (0.35 + back * 0.02) * sc);
+        }
         c.globalAlpha = 1;
       }
     }
+    nameTags(c, box, tags, box[1] + (opts.hud === false ? 6 : hudHeight(box) + 4));
     return { t, cam };
   }
-  const lerp3 = (p, q, a) => [lerp(p[0], q[0], a), lerp(p[1], q[1], a), lerp(p[2], q[2], a)];
+  // 头顶名牌：主色小牌，画在最上层（不被人和围绳挡）；头顶放不下（会钻进顶栏）就挪到脑后那一侧，贴身时左右让开
+  function nameTags(c, box, tags, top) {
+    if (!tags.length) return;
+    const fs = clamp(box[3] * 0.026, 11, 30), hh = fs * 1.4;
+    c.font = `800 ${fs}px "Microsoft YaHei", system-ui`; c.textAlign = 'center'; c.textBaseline = 'middle';
+    for (const g of tags) {
+      g.w = c.measureText(g.text).width + fs * 1.1;
+      g.x = g.hx; g.y = g.hy - g.hr * 1.9 - hh / 2;
+      if (g.y < top + hh / 2) { g.y = Math.max(g.hy, top + hh / 2); g.x = g.hx + g.side * (g.hr * 1.5 + g.w / 2); }
+    }
+    if (tags.length === 2) {
+      const [a, b] = tags[0].x <= tags[1].x ? tags : [tags[1], tags[0]];
+      const need = (a.w + b.w) / 2 + fs * 0.4 - (b.x - a.x);
+      if (need > 0 && Math.abs(a.y - b.y) < hh) { a.x -= need / 2; b.x += need / 2; }
+    }
+    for (const g of tags) {
+      c.fillStyle = g.col; c.strokeStyle = 'rgba(0,0,0,0.55)'; c.lineWidth = 1.5;
+      roundRect(c, g.x - g.w / 2, g.y - hh / 2, g.w, hh, hh / 2); c.fill(); c.stroke();
+      c.fillStyle = '#ffffff'; c.fillText(g.text, g.x, g.y + fs * 0.04);
+    }
+    c.textBaseline = 'alphabetic';
+  }
 
   // ---------------------------------------------------------------- 转播包装
   function roundRect(c, x, y, w, h, r) { c.beginPath(); c.roundRect(x, y, w, h, r); }
+  const hudHeight = box => Math.max(58, box[2] * 0.062);
   function hud(c, rep, t, box, names, sub) {
     const [x0, y0, w] = box, fr = rep.frames[t];
-    const H = Math.max(54, w * 0.055);
+    const H = hudHeight(box);
     c.fillStyle = 'rgba(6,8,14,0.78)'; c.fillRect(x0, y0, w, H);
     const ids = [rep.bodies[0].id, rep.bodies[1].id];
     for (let k = 0; k < 2; k++) {
       const f = fr.f[k], right = k === 1, bw = w * 0.36, bx = right ? x0 + w - 16 - bw : x0 + 16;
       const L = look(ids[k]);
       c.fillStyle = L.accent || L.trunk; c.fillRect(right ? x0 + w - 8 : x0, y0, 8, H);
-      c.font = `700 ${H * 0.27}px "Microsoft YaHei", system-ui`; c.textAlign = right ? 'right' : 'left'; c.fillStyle = '#fff';
-      c.fillText(names[k], right ? bx + bw : bx, y0 + H * 0.34);
+      c.font = `700 ${H * 0.24}px "Microsoft YaHei", system-ui`; c.textAlign = right ? 'right' : 'left'; c.fillStyle = '#fff';
+      c.fillText(names[k], right ? bx + bw : bx, y0 + H * 0.3);
       const tags = `${SIM.postures[f[F.post]]}${f[F.st] < 0 ? '·反架' : ''}${sub ? ' · ' + SIM.plans[f[F.plan]] : ''}${f[F.tilt] ? ' · 上头' : ''}`;
-      const bar = (yy, v, col, hh) => { c.fillStyle = 'rgba(255,255,255,0.14)'; c.fillRect(bx, yy, bw, hh); c.fillStyle = col; const ww = bw * clamp(v, 0, 1); c.fillRect(right ? bx + bw - ww : bx, yy, ww, hh); };
-      bar(y0 + H * 0.46, f[F.hp] / 100, L.accent || L.glove, H * 0.16);
-      bar(y0 + H * 0.68, f[F.stam], '#cfcac0', H * 0.08);
-      bar(y0 + H * 0.82, f[F.comp] / 100, '#86b8ff', H * 0.08);
-      c.font = `${H * 0.17}px "Microsoft YaHei"`; c.fillStyle = 'rgba(255,255,255,0.75)'; c.textAlign = right ? 'left' : 'right';
-      c.fillText(tags, right ? bx : bx + bw, y0 + H * 0.34);
+      // 条从外侧往中间填，标签写在外侧：o 是从外侧量起的距离
+      const O = o => right ? bx + bw - o : bx + o;
+      const rect = (o1, o2, yy, hh) => c.fillRect(Math.min(O(o1), O(o2)), yy, Math.abs(o2 - o1), hh);
+      const lab = H * 0.42;
+      const meter = (label, o1, o2, yy, hh, v, col) => {
+        c.font = `700 ${H * 0.14}px "Microsoft YaHei"`; c.fillStyle = 'rgba(255,255,255,0.6)'; c.textAlign = right ? 'right' : 'left'; c.textBaseline = 'middle';
+        c.fillText(label, O(o1), yy + hh / 2); c.textBaseline = 'alphabetic';
+        c.fillStyle = 'rgba(255,255,255,0.14)'; rect(o1 + lab, o2, yy, hh);
+        c.fillStyle = col; rect(o1 + lab, o1 + lab + (o2 - o1 - lab) * clamp(v, 0, 1), yy, hh);
+      };
+      meter('体力', 0, bw, y0 + H * 0.4, H * 0.17, f[F.hp] / 100, L.accent || L.glove);
+      const half = (bw - H * 0.3) / 2;
+      meter('体能', 0, half, y0 + H * 0.7, H * 0.1, f[F.stam], '#cfcac0');
+      meter('心态', half + H * 0.3, bw, y0 + H * 0.7, H * 0.1, f[F.comp] / 100, '#86b8ff');
+      c.font = `${H * 0.16}px "Microsoft YaHei"`; c.fillStyle = 'rgba(255,255,255,0.75)'; c.textAlign = right ? 'left' : 'right';
+      c.fillText(tags, right ? bx : bx + bw, y0 + H * 0.3);
     }
     const secs = fr.t * SIM.DT;
     c.fillStyle = '#e8b33c'; roundRect(c, x0 + w / 2 - H * 1.2, y0 + H * 0.12, H * 2.4, H * 0.76, 8); c.fill();
@@ -504,8 +615,10 @@ const VIZ = (() => {
   function caption(c, box, text, sub, col, alpha = 1, opts = {}) {
     const [x0, y0, w, h] = box;
     c.globalAlpha = alpha;
-    const fs = Math.round(w / 20);
+    let fs = Math.round(w / 22);
     c.font = `900 ${fs}px "Microsoft YaHei", system-ui`; c.textAlign = 'center';
+    const tw = c.measureText(text).width;                       // 长字幕缩小到一行放得下，不压满整个画面
+    if (tw > w * 0.8) { fs = Math.floor(fs * w * 0.8 / tw); c.font = `900 ${fs}px "Microsoft YaHei", system-ui`; }
     const yy = y0 + h * (opts.y || 0.84);
     // 底下垫一条渐变暗带，字幕不跟擂台裙边上的字搅在一起
     const bh = fs * (sub ? 2.1 : 1.6), g = c.createLinearGradient(0, yy - fs * 1.1, 0, yy - fs * 1.1 + bh);
@@ -565,21 +678,23 @@ const VIZ = (() => {
     const names = meta.names, ids = card.fighters;
     const local = tOut - s.start;
     if (s.type === 'intro') return drawIntro(c, card, box, local / s.dur, meta);
+    const fopts = { ids, labels: meta.labels || ids, apron: meta.apron };
     if (s.type === 'result') {
-      drawBoutFrame(c, rep, n - 1, box, { ids, labels: meta.labels || ids });
+      drawBoutFrame(c, rep, n - 1, box, fopts);
       hud(c, rep, n - 1, box, names, true);
       return drawResult(c, card, box, local / s.dur, meta);
     }
     if (s.type === 'break') {
       const t = Math.min(n - 1, s.at);
-      drawBoutFrame(c, rep, t, box, { ids, labels: meta.labels || ids });
+      drawBoutFrame(c, rep, t, box, fopts);
       return drawBreak(c, rep, t, box, local / s.dur, meta);
     }
     if (s.type === 'replay') {
       const tf = s.from + local / s.dur * (s.to - s.from);
       const ti = clamp(Math.floor(tf), 0, n - 1);
       const base = rep._cam[ti];
-      drawBoutFrame(c, rep, tf, box, { ids, labels: meta.labels || ids, cam: [base[0], base[1], base[2] * 1.45] });
+      if (s.rot === undefined) s.rot = bestRot(rep, s.from, s.to);       // 回放整段用一个看得最清楚的机位
+      drawBoutFrame(c, rep, tf, box, { ...fopts, hud: false, cam: [base[0], base[1], base[2] * 1.45, s.rot] });
       const [x0, y0, w, h] = box;
       c.fillStyle = 'rgba(0,0,0,0.25)'; c.fillRect(x0, y0, w, h);
       c.fillStyle = '#d03b3b'; roundRect(c, x0 + 24, y0 + 24, 120, 40, 6); c.fill();
@@ -587,25 +702,31 @@ const VIZ = (() => {
       return;
     }
     const tf = s.from + local / DT_OUT;
-    const { t } = drawBoutFrame(c, rep, tf, box, { ids, labels: meta.labels || ids });
+    const { t } = drawBoutFrame(c, rep, tf, box, fopts);
     hud(c, rep, t, box, names, true);
     // 回合开始横幅
     const roundStart = [0, ...rep._prep.rounds].filter(r => r <= t).pop();
     if (t - roundStart < 30) banner(c, box, `第 ${rep.frames[t].r + 1} 回合`, card.title, (t - roundStart) / 30);
-    // 大事件字幕
+    // 大事件字幕（底部，同一时刻只有一条）
     const ev = rep._prep.events.filter(e => e.t <= t && t - e.t < 28 && e.big >= 2).pop();
     if (ev) caption(c, box, `${names[ev.k]} ${ev.text}`, null, ev.big === 3 ? '#ff5a4f' : '#ffd24a', 1 - (t - ev.t) / 28);
-    // 读秒
+    // 读秒：挂在倒地那一方的顶栏下面，不压在人身上
     for (let k = 0; k < 2; k++) {
       const f = rep.frames[t].f[k];
-      if (f[F.ph] === PH.DOWN) {
-        const el = t - rep._prep.downAt[t][k], cnt = Math.min(10, Math.floor(el / 60 * 10) + 1);
-        const [x0, y0, w, h] = box;
-        c.font = `900 ${w / 7}px system-ui`; c.textAlign = 'center'; c.lineWidth = 10; c.strokeStyle = 'rgba(0,0,0,0.7)';
-        c.strokeText(String(cnt), x0 + w / 2, y0 + h * 0.62); c.fillStyle = '#ffffff'; c.fillText(String(cnt), x0 + w / 2, y0 + h * 0.62);
-        c.font = `700 ${w / 40}px "Microsoft YaHei"`; c.fillText(`${names[k]} 倒地，裁判读秒`, x0 + w / 2, y0 + h * 0.7);
-      }
+      if (f[F.ph] === PH.DOWN) countBadge(c, box, k, Math.floor((t - rep._prep.downAt[t][k]) / 6), names[k]);
     }
+  }
+  // 读秒数字和解说一致：倒地后每 6 帧数一个（读秒压缩成 3 秒），刚倒下那一下还没开始数
+  function countBadge(c, box, k, cnt, name) {
+    if (cnt < 1) return;
+    const [x0, y0, w, h] = box, H = hudHeight(box), bw = w * 0.13, bh = h * 0.2;
+    const bx = k === 0 ? x0 + 16 : x0 + w - 16 - bw, by = y0 + H + h * 0.02;
+    c.fillStyle = 'rgba(8,10,16,0.82)'; roundRect(c, bx, by, bw, bh, 10); c.fill();
+    c.fillStyle = '#ff5a4f'; c.fillRect(bx, by, bw, 4);
+    c.textAlign = 'center'; c.fillStyle = '#ffffff'; c.font = `900 ${bh * 0.6}px system-ui`;
+    c.fillText(String(Math.min(10, cnt)), bx + bw / 2, by + bh * 0.66);
+    c.font = `700 ${bh * 0.13}px "Microsoft YaHei"`; c.fillStyle = 'rgba(255,255,255,0.75)';
+    c.fillText(`${name} 倒地`, bx + bw / 2, by + bh * 0.88);
   }
 
   function drawIntro(c, card, box, p, meta) {
@@ -717,7 +838,7 @@ const VIZ = (() => {
   function drawGymRing(c, box, cam) {
     const R = SIM.RING;
     gymWall(c, box);
-    const q = [cam.P(0, 0), cam.P(R, 0), cam.P(R, R), cam.P(0, R)];
+    const q = [cam.Pc(0, 0), cam.Pc(R, 0), cam.Pc(R, R), cam.Pc(0, R)];
     c.fillStyle = '#3c6e9e'; c.beginPath(); q.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.closePath(); c.fill();
     c.fillStyle = '#26476a'; c.beginPath(); c.moveTo(q[0][0], q[0][1]); c.lineTo(q[1][0], q[1][1]); c.lineTo(q[1][0], q[1][1] + q[1][2] * 0.3); c.lineTo(q[0][0], q[0][1] + q[0][2] * 0.3); c.closePath(); c.fill();
     ropes(c, cam, 'far');
@@ -757,7 +878,7 @@ const VIZ = (() => {
       const clip = ctx.clips[`${entry.day}_${id}`];
       if (clip) {
         const rep = clip._rep || (clip._rep = prep({ frames: clip.frames, bodies: clip.bodies }));
-        drawBoutFrame(c, rep, (t * 20) % rep.frames.length, box, { gym: true, ids: [id, 'S'], labels: [ctx.names[id], clip.partner] });
+        drawBoutFrame(c, rep, (t * 20) % rep.frames.length, box, { gym: true, hud: false, ids: [id, 'S'], labels: [ctx.names[id], clip.partner] });
       } else { gymWall(c, box); gymFloor(c, box, floor); shadow(cx); drawBoxer(c, cx, floor, s, 1, id, body, guardPose(B)); }
       if (note.iters) cap += ` · 真实训练 ${note.iters} 轮`;
     } else if (act === '看录像' || act === '实战复盘') {
@@ -765,7 +886,7 @@ const VIZ = (() => {
       const tvx = x0 + w * 0.08, tvy = y0 + h * 0.08, tvw = w * 0.84, tvh = tvw * 9 / 16 * 0.85;
       c.fillStyle = '#000'; c.fillRect(tvx - 8, tvy - 8, tvw + 16, tvh + 16);
       const fg = ctx.lastFight(entry.day);
-      if (fg) { c.save(); c.beginPath(); c.rect(tvx, tvy, tvw, tvh); c.clip(); prep(fg); drawBoutFrame(c, fg, (t * 20 + 200) % fg.frames.length, [tvx, tvy, tvw, tvh], { ids: fg.fighters, labels: fg.fighters }); c.restore(); }
+      if (fg) { c.save(); c.beginPath(); c.rect(tvx, tvy, tvw, tvh); c.clip(); prep(fg); drawBoutFrame(c, fg, (t * 20 + 200) % fg.frames.length, [tvx, tvy, tvw, tvh], { hud: false, ids: fg.fighters, labels: fg.fighters }); c.restore(); }
       c.fillStyle = 'rgba(255,255,255,0.05)'; c.fillRect(tvx, tvy, tvw, tvh * 0.5);
       c.fillStyle = '#3b2c22'; c.fillRect(cx - 0.5 * s, floor - 0.45 * s, 1.0 * s, 0.08 * s);
       const sit = guardPose(B); sit.crouch = 1.4; sit.lean = 0.05; sit.lead = [0.32, B.hipH * 0.55]; sit.rear = [0.25, B.hipH * 0.5]; sit.feet = [0.32, 0.18, 0, 0];
@@ -885,23 +1006,23 @@ const VIZ = (() => {
   // ---------------------------------------------------------------- 声音事件表（导出视频时由 tools/make_audio.py 合成）
   // 时间都是这一条目内的输出时间（秒）。pan：-1 左 ~ 1 右，按命中位置在画面上的左右算
   const CN_NUM = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
-  function panAt(rep, tick, x) {
-    const cam = rep._cam[clamp(tick, 0, rep._cam.length - 1)];
-    return clamp((x - cam[0]) * 0.34 * cam[2], -0.85, 0.85);
+  function panAt(rep, tick, x, y) {
+    const cam = rep._cam[clamp(tick, 0, rep._cam.length - 1)], rot = cam[3] || 0;
+    return clamp((toCam(rot, x, y)[0] - toCam(rot, cam[0], cam[1])[0]) * 0.34 * cam[2], -0.85, 0.85);
   }
   function tickEvents(rep, tt, tOut, ev, extra = {}) {
     const fr = rep.frames[tt];
     for (let k = 0; k < 2; k++) {
       const f = fr.f[k], o = fr.f[1 - k];
       if (f[F.fired]) {
-        const p = f[F.fired] - 1, pan = panAt(rep, tt, o[F.x]);
+        const p = f[F.fired] - 1, pan = panAt(rep, tt, o[F.x], o[F.y]);
         const power = p >= 2, body = SIM.TGT[p] === 1;
         if (f[F.oc] === 1) ev.push({ t: tOut, type: 'hit', dmg: f[F.dmg], power, body, counter: !!f[F.ctr], pan, ...extra });
         else if (f[F.oc] === 2) ev.push({ t: tOut, type: 'block', power, pan, ...extra });
         else if (f[F.oc] === 3) ev.push({ t: tOut, type: 'evade', pan, ...extra });
         else ev.push({ t: tOut, type: 'whiff', power, pan, ...extra });
       }
-      if (f[F.kd]) ev.push({ t: tOut, type: 'kd', pan: panAt(rep, tt, f[F.x]), ...extra });
+      if (f[F.kd]) ev.push({ t: tOut, type: 'kd', pan: panAt(rep, tt, f[F.x], f[F.y]), ...extra });
     }
   }
   function fightAudio(card, from, to, meta) {
@@ -995,6 +1116,6 @@ const VIZ = (() => {
     return ev;
   }
 
-  return { accent, tickEvents, fightAudio, trainingAudio, drawTraining, guardPose, punchPose, F, PH, LOOK, look, build, drawBoxer, drawHead, prep, poseAt, drawBoutFrame, makeCam, drawArena, hud, caption, banner, timeline, segAt, renderFight, setSim: s => { SIM = s; }, ease, easeOut, lerp, clamp, shade, mixHex, hash };
+  return { accent, tickEvents, fightAudio, trainingAudio, drawTraining, guardPose, punchPose, F, PH, LOOK, look, build, drawBoxer, drawHead, prep, poseAt, drawBoutFrame, makeCam, drawArena, hud, hudHeight, caption, banner, timeline, segAt, renderFight, setSim: s => { SIM = s; }, ease, easeOut, lerp, clamp, shade, mixHex, hash };
 })();
 if (typeof window !== 'undefined') window.VIZ = VIZ;

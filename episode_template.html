@@ -47,7 +47,7 @@ EP.order.forEach(id => SEGS.push({ type: 'profile', id, title: NAME(id), dur: 10
 SEGS.push({ type: 'chapter', title: '第一章', big: '从零学拳', sub: EP.growth_sub, dur: 4.5 });
 EP.growth.forEach((g, i) => { g._rep = VIZ.prep({ frames: g.frames, bodies: g.bodies }); SEGS.push({ type: 'growth', g, i, title: `成长 ${i + 1}`, dur: g.dur }); });
 SEGS.push({ type: 'chapter', title: '第二章', big: '首战', sub: EP.fight_sub, dur: 4.5 });
-const FMETA = { names: EP.fight.fighters.map(NAME), labels: EP.fight.fighters.map(NICK), tale: EP.tale, drawPortrait: (...a) => portrait(...a) };
+const FMETA = { names: EP.fight.fighters.map(NAME), labels: EP.fight.fighters.map(NICK), tale: EP.tale, apron: EP.apron, drawPortrait: (...a) => portrait(...a) };
 SEGS.push({ type: 'fight', title: '首战', dur: VIZ.timeline(EP.fight).total });
 SEGS.push({ type: 'outro', title: '片尾', dur: 10 });
 
@@ -199,17 +199,17 @@ function drawGrowth(c, box, t, dur, g, i) {
   const [x0, y0, w, h] = box, s = h / 720, rep = g._rep, n = rep.frames.length;
   const tf = Math.min(n - 1, g.from + t * 20 * g.speed);
   const ids = g.bodies.map(b => b.id);
-  const { t: ti } = VIZ.drawBoutFrame(c, rep, tf, box, { ids, labels: ids.map(NICK) });
+  const { t: ti } = VIZ.drawBoutFrame(c, rep, tf, box, { ids, labels: ids.map(NICK), apron: EP.apron });
   VIZ.hud(c, rep, ti, box, ids.map(NAME), false);
-  // 左上：成长节点
-  const p = t / dur;
-  c.fillStyle = 'rgba(6,8,14,0.82)'; c.beginPath(); c.roundRect(x0 + 18 * s, y0 + 78 * s, 330 * s, 96 * s, 10 * s); c.fill();
-  c.fillStyle = '#e8b33c'; c.fillRect(x0 + 18 * s, y0 + 78 * s, 6 * s, 96 * s);
+  // 左上：成长节点（紧贴顶栏下面）
+  const p = t / dur, cy = y0 + VIZ.hudHeight(box) + 10 * s;
+  c.fillStyle = 'rgba(6,8,14,0.82)'; c.beginPath(); c.roundRect(x0 + 18 * s, cy, 330 * s, 96 * s, 10 * s); c.fill();
+  c.fillStyle = '#e8b33c'; c.fillRect(x0 + 18 * s, cy, 6 * s, 96 * s);
   c.textAlign = 'left'; c.font = `700 ${15 * s}px ${FONT}`; c.fillStyle = '#e8b33c';
-  c.fillText(`成长记录 ${String(i + 1).padStart(2, '0')} / ${String(EP.growth.length).padStart(2, '0')}`, x0 + 36 * s, y0 + 104 * s);
-  c.font = `900 ${28 * s}px ${FONT}`; c.fillStyle = '#fff'; c.fillText(g.when, x0 + 36 * s, y0 + 140 * s);
-  c.font = `${14 * s}px ${FONT}`; c.fillStyle = 'rgba(255,255,255,0.65)'; c.fillText(g.when_sub, x0 + 36 * s, y0 + 163 * s);
-  if (g.speed !== 1) { c.fillStyle = '#d03b3b'; c.beginPath(); c.roundRect(x0 + w - 150 * s, y0 + 78 * s, 130 * s, 34 * s, 6 * s); c.fill(); c.fillStyle = '#fff'; c.font = `800 ${16 * s}px ${FONT}`; c.textAlign = 'center'; c.fillText(g.speed < 1 ? '慢 镜' : `${g.speed} 倍速`, x0 + w - 85 * s, y0 + 101 * s); }
+  c.fillText(`成长记录 ${String(i + 1).padStart(2, '0')} / ${String(EP.growth.length).padStart(2, '0')}`, x0 + 36 * s, cy + 26 * s);
+  c.font = `900 ${28 * s}px ${FONT}`; c.fillStyle = '#fff'; c.fillText(g.when, x0 + 36 * s, cy + 62 * s);
+  c.font = `${14 * s}px ${FONT}`; c.fillStyle = 'rgba(255,255,255,0.65)'; c.fillText(g.when_sub, x0 + 36 * s, cy + 85 * s);
+  if (g.speed !== 1) { c.fillStyle = '#d03b3b'; c.beginPath(); c.roundRect(x0 + w - 150 * s, cy, 130 * s, 34 * s, 6 * s); c.fill(); c.fillStyle = '#fff'; c.font = `800 ${16 * s}px ${FONT}`; c.textAlign = 'center'; c.fillText(g.speed < 1 ? '慢 镜' : `${g.speed} 倍速`, x0 + w - 85 * s, cy + 23 * s); }
   // 下方：这一阶段在学什么 / 里程碑
   const cap = g.caption;
   if (cap) VIZ.caption(c, box, cap.text, cap.sub || null, cap.big ? '#ff5a4f' : '#ffd24a', clamp(p * 6, 0, 1) * clamp((1 - p) * 8, 0, 1));

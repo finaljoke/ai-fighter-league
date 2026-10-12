@@ -6,7 +6,7 @@ const [page_, outDir, spec] = process.argv.slice(2);
 const b = await puppeteer.launch({ executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: 'new', args: ['--allow-file-access-from-files'] });
 const p = await b.newPage(); p.on('pageerror', e => console.error('[页面错误]', e.message));
 await p.goto(pathToFileURL(page_).href); await p.evaluate(() => document.fonts.ready);
-await p.waitForFunction(() => window.EXPORT.ready(), { timeout: 30000 });
+await p.waitForFunction(() => !window.EXPORT.ready || window.EXPORT.ready(), { timeout: 30000 });
 const items = await p.evaluate(() => EXPORT.items());
 console.log(items.map(x => `${x.i}:${x.title}(${x.dur.toFixed(1)}s)`).join(' '));
 for (const s of spec.split(',')) {
