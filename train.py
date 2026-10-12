@@ -200,13 +200,18 @@ def main():
     it_off = 0                             # 接着旧档练时，轮数接着上一段往下数
     if args.init and args.record:
         src_dir = os.path.join("runs", args.init.partition(":")[0])
-        mpath = os.path.join(src_dir, "milestones.jsonl")
-        if os.path.exists(mpath):
-            for l in open(mpath, encoding="utf-8"):
-                m = json.loads(l)
-                for k, b in enumerate(bodies):
-                    if m["char"] == b.id:
-                        firsts[k].add(m["event"])
+        # 正史可能分好几段接着练：顺着 --init 一路往前，每一段记过的"第一次"都算，免得新的一段又记一遍"第一次出拳"
+        name = args.init.partition(":")[0]
+        while name:
+            d = os.path.join("runs", name)
+            mpath = os.path.join(d, "milestones.jsonl")
+            if os.path.exists(mpath):
+                for l in open(mpath, encoding="utf-8"):
+                    m = json.loads(l)
+                    for k, b in enumerate(bodies):
+                        if m["char"] == b.id:
+                            firsts[k].add(m["event"])
+            name = (json.load(open(os.path.join(d, "config.json"), encoding="utf-8"))["args"].get("init") or "").partition(":")[0]
         gdir = os.path.join(src_dir, "growth")
         if os.path.isdir(gdir):
             last = json.load(open(os.path.join(gdir, sorted(os.listdir(gdir))[-1]), encoding="utf-8"))

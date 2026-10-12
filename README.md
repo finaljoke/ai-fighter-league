@@ -45,6 +45,8 @@ py -X utf8 render_season.py --name s0                       # 改了画面代码
 node tools/export_video.mjs runs/season_s0.html runs/第1战.mp4 --items 0                 # 导出一场比赛
 node tools/export_video.mjs runs/season_s0.html runs/训练营.mp4 --items 1-35 --day-len 3  # 导出训练营（每天 3 秒）
 py -X utf8 make_episode.py --run canon_s1,canon_s1b          # 试播集页面（正史分几段练的按先后列出）
+# 正史第三段（首战之后，box2d-v15 规则）：从 canon_s1b 第 550 轮接着两人一起练，只练一次，练出什么就是什么
+py -X utf8 train.py --run canon_s1c --sim boxing --bodies GY,LJ --seed 3 --iters 300 --init canon_s1b:12 --record 2 --coach-frac 0.3 --vf-warmup 10 --gamma 0.999 --ent 0.005 --ent-end 0.003 --snap-every 25 --eval-n 32 --point-reward 0 --kd-reward 0
 node tools/export_video.mjs runs/episode_pilot.html runs/试播集.mp4 --items all
 ```
 
