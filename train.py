@@ -64,6 +64,9 @@ def main():
     ap.add_argument("--coach-iters", type=int, default=0)
     # 教练陪练：启蒙期之后，仍有这个比例的场次由陪练教练控制一方（真实拳手天天和陪练对打）
     ap.add_argument("--coach-frac", type=float, default=0.0)
+    # 针对性训练（实验用，配合 --init）：这一方（角色 id）固定在接手时的版本，出招网络和熟练度都不再变；
+    # 另一方只和他打（不打陪练教练和历史版本），专门练怎么赢这个对手
+    ap.add_argument("--frozen", default=None)
     ap.add_argument("--floor-frac", type=float, default=0.0)
     ap.add_argument("--floor-lo", type=float, default=0.2)
     ap.add_argument("--floor-hi", type=float, default=0.6)
@@ -127,6 +130,13 @@ def main():
             f.seek(0); json.dump(cfg, f, ensure_ascii=False, indent=2); f.truncate()
         if box:
             sim.set_skills(skills)
+    frozen = None
+    if args.frozen:
+        if not args.init:
+            raise SystemExit("--frozen 要配合 --init：固定的是接手时的那个版本")
+        frozen = [b.id for b in bodies].index(args.frozen)
+        frozen_skills = skills[frozen].copy() if box else None
+        pool_share[:] = 0.0                     # 只打这个对手，不打历史版本
 
     def snapshot(it):
         ver = len(pool[0])
@@ -286,13 +296,16 @@ def main():
             new_floors(done)
             obs = sim.observe()
 
-        if res["eps"] >= 10:                    # 当前版本互打一边倒时，弱的一方多打历史版本
+        if res["eps"] >= 10 and frozen is None:  # 当前版本互打一边倒时，弱的一方多打历史版本
             wa, wb = res["A"] / res["eps"], res["B"] / res["eps"]
             pool_share = np.array([0.45 if wa < 0.25 else 0.25, 0.45 if wb < 0.25 else 0.25])
         frac = (it - 1) / max(1, args.iters - 1)
         ent = args.ent + (args.ent_end - args.ent) * frac
         stats = {}
         for side in (0, 1):
+            if side == frozen:
+                stats[bodies[side].id] = {"kl": float("nan"), "clipfrac": 0.0, "ent": float("nan"), "vloss": 0.0}
+                continue
             last_v = agents[side].value(obs[:, side])
             adv = gae(B_rew[..., side], B_val[..., side], B_done, last_v, args.gamma, args.lam)
             ret = adv + B_val[..., side]
@@ -306,6 +319,8 @@ def main():
 
         if box:
             skills = evolve_skills(skills, talent, usage, succ, learn_ticks, drill * (0.6 + 0.8 * iq[:, None]))
+            if frozen is not None:
+                skills[frozen] = frozen_skills
             sim.set_skills(skills)
         el = time.time() - t0
         log = {"iter": it, "ticks": total_ticks, "secs": round(el, 1), "ent_coef": ent,
