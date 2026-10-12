@@ -90,6 +90,7 @@ def best_window(frames, secs=9.0):
 
 
 CLIP = 8.0                    # 每段成长片段的秒数
+FRAMES = os.path.join("runs", "replay_frames")   # 回放算出来的画面帧：规则改版以后，旧回放读这里，不重算
 LEAD = 5.0                    # 重演片段里，里程碑那一下出现在第几秒
 # 进成长片段的里程碑：只要击倒和提前结束比赛这类大事，数字越大越重要
 BIG = {"第一次 KO 获胜": 5, "第一次 TKO 获胜": 4, "第一次肝区击倒": 3, "第一次一拳打中下颌把人打倒": 2, "第一次打倒对手": 1}
@@ -127,7 +128,7 @@ def archive_clip(item, caption, voice, coach):
     it, run, v = item
     g = json.load(open(os.path.join(run["dir"], "growth", f"v{v:04d}.json"), encoding="utf-8"))
     rec = g["replays"][0]
-    frames = BL.resimulate(rec)
+    frames = BL.frames_of(rec, FRAMES)
     sub = f"已对打 {g['fights']} 场"
     ev = next((e for e in run["evals"] if e["version"] == v), None)
     if ev:
@@ -202,7 +203,7 @@ def reenact(m, runs, items, coach, cache):
 
 
 def reenact_clip(m, r, nick):
-    frames = BL.resimulate(r["rec"])
+    frames = BL.frames_of(r["rec"], FRAMES)
     ids = [b["id"] for b in r["rec"]["bodies"]]
     k = ids.index(m["char"])
     coach = r["vs"] == "coach"
@@ -264,7 +265,7 @@ def main():
     coach = runs[0]["cfg"]["args"].get("coach_iters", 0)
     clips, total_fights = growth_clips(runs, milestones, coach)
     card = first_fight(run, skills_of)
-    card["frames"] = BL.resimulate(card["replay"])
+    card["frames"] = BL.frames_of(card["replay"], FRAMES)
     chars = {c: char_card(c, skills_of[c]) for c in ORDER}
     # 首战数据（片尾用）
     fr = card["frames"]

@@ -283,6 +283,25 @@ def choose_plan(bodies, pols, side, skills, n=16, seed=4242, opp_plan=0):
     return sorted(scores, key=lambda x: -x[1])
 
 
+def frames_of(rec, cache_dir):
+    """回放 → 逐帧画面数据。规则改了以后，旧回放在新规则下重算会走样（正史首战"结果不重来"），
+    所以第一次算出来就把帧存进 cache_dir；回放的规则版本和现在一样就重算并核对，不一样就读存好的帧。"""
+    import hashlib
+    import json
+    import os
+    key = hashlib.sha1((rec.get("sim_version", "") + "|" + "|".join(rec["actions"]) + "|" + json.dumps(rec["init"])).encode()).hexdigest()[:16]
+    path = os.path.join(cache_dir, f"{key}.json")
+    if rec.get("sim_version") == B.SIM_VERSION:
+        frames = resimulate(rec)
+        if not os.path.exists(path):
+            os.makedirs(cache_dir, exist_ok=True)
+            json.dump(frames, open(path, "w", encoding="utf-8"), separators=(",", ":"))
+        return frames
+    if os.path.exists(path):
+        return json.load(open(path, encoding="utf-8"))
+    raise SystemExit(f"这场回放是 {rec.get('sim_version')} 规则下打的，现在是 {B.SIM_VERSION}，也没有存好的画面（{path}），没法重算")
+
+
 def resimulate(rec):
     """按回放档重新模拟，返回逐帧画面数据，并核对结果和存档一致。"""
     from bodies import Body

@@ -7,7 +7,7 @@
 """
 import numpy as np
 
-SIM_VERSION = "box2d-v13"
+SIM_VERSION = "box2d-v14"
 
 DT = 0.05
 RING = 6.1
@@ -22,6 +22,7 @@ STUN_DECAY = 8.0 * DT
 BODY_DECAY = 2.0 * DT
 STAM_BASE, STAM_REGEN = 100.0, 2.5     # 体能回复：持续出拳量被体能卡住（高手每分钟三十来拳）
 WALK_COST = 0.04                        # 走动每帧耗的体能：外围型来回走也会累
+GUARD_REGEN = 0.75                      # 举着架子体能照样回、慢一点：手举着也费力（护手下垂部分是主动省力），没有"恢复减半"的依据
 TIRED = 0.25                            # 只用于统计"累垮时间占比"；疲劳的影响见 fatigue()，是逐渐变化的
 # 疲劳程度到 1（体能见底）时的影响，中间按 fatigue() 的曲线逐渐加上去（调研：先平后陡，没有突然全面失效）
 FAT_GUARD, FAT_HIGH_GUARD = 0.5, 0.4    # 默认护架最低保留一半；专门举架最低 ×0.6
@@ -209,12 +210,21 @@ FORM_SD = 0.3
 TILT_TICKS = 60
 TILT_POWER, TILT_GLANCE = 1.10, 1.5
 TELEGRAPH_SKILL = 0.35      # 熟练度低于这个的拳会"露馅"：对手早一帧看到起手
+# 出拳前的身体预备（v14，审计 G7）：转肩、移重心，打身体还要先屈膝降重心。从身体开始动算起，后手直拳约 357 毫秒、
+# 勾拳约 477 毫秒才打到（Piorkowski），胳膊真正打出去只占 100~220 毫秒；刺拳几乎不用预备（"别闪第一记刺拳"）。
+# 组合拳的后一拳借前一拳收回时的转腰发力，预备少 PREP_COMBO 帧。观察力 READ_LO 以下看不出预备，READ_HI 以上全看得出
+# （看不出的人要等胳膊动了才知道；看得出的人也会被同样的身体动作骗——虚晃骗的就是这些人）
+#                刺头 刺身 后直头 后直身 前勾头 前勾身 后勾头 后勾身 前上头 前上身 后上头 后上身
+PREP = np.array([1,   2,   2,     3,     3,     3,     3,     3,     2,     2,     3,     3])
+PREP_COMBO = 2
+READ_LO, READ_HI = 0.3, 0.8
 
 # 心智：观察力、拳商（0~1，0.5 普通）
 #   观察力：读招学得快、对对手体能心态看得准、看得出对手露馅、能看穿一部分虚晃
 #   拳商：出昏招少（压力下更明显），训练时学得快
 TELL_OBS = 0.4              # 观察力到这个才看得出对手露馅
-LAPSE_MAX = 0.12            # 拳商 0 时每帧出昏招的概率；心态差时翻倍
+LAPSE_MAX = 0.12            # 拳商 0 时每秒出昏招的概率，心态差时翻倍。v14 起按秒算：原来按帧算，拳商 0.5 的普通人一分钟 70 多次昏招，
+                            # 光是随机抽出来的拳就把体能抽干，闪躲也大多是乱按的。现在普通人每分钟三四次（一回合几次，常识，没有统计）
 
 # 战术计划：限制一部分选择，不碰奖励。被限制的动作每帧只有 25% 的时候可选
 PLAN_NAMES = ["自由发挥", "外围控距", "压迫打身", "防守反击", "重拳抢攻", "稳拿分数"]
@@ -327,6 +337,17 @@ def luck(seed, tick, salt):
     return (z >> np.uint64(11)).astype(np.float64) * (1.0 / (1 << 53))
 
 
+def sround(x, u):
+    """按概率取整：x = 4.76 时 76% 取 5、24% 取 4，平均正好是 x（u 是可重放的运气）。手速、熟练度的小差别也就算数了。"""
+    f = np.floor(x)
+    return (f + (u < x - f)).astype(np.int64)
+
+
+def prep_seen(prep, observation):
+    """出拳预备里看得出的帧数：观察力 READ_LO 以下一帧也看不出，READ_HI 以上全看得出。"""
+    return np.round(prep * np.clip((observation - READ_LO) / (READ_HI - READ_LO), 0.0, 1.0)).astype(np.int64)
+
+
 def skill_vector(skills):
     """{技术名: 熟练度} → 数组，没写的按 0.5。"""
     v = np.full(N_TECH, 0.5)
@@ -338,7 +359,7 @@ def skill_vector(skills):
 def lapse(actions, mask, sim, rng):
     """拳商：每帧有一定概率出昏招（换成一个随机的可选动作），心态差时翻倍。
     放在选动作之后、进模拟器之前，所以记录下来的就是实际执行的动作，回放不受影响。"""
-    eps = LAPSE_MAX * (1 - sim.mind[None, :, 1]) * (1 + (sim.comp < COMP_SLOW1))
+    eps = LAPSE_MAX * DT * (1 - sim.mind[None, :, 1]) * (1 + (sim.comp < COMP_SLOW1))
     hit = rng.random(actions.shape) < eps
     if not hit.any():
         return actions, hit
@@ -402,10 +423,12 @@ class Sim:
         self.init = z(6)                # 初始距离、y 偏移、开场朝向扰动、双方当天状态、这场的运气种子
         self.luck_seed, self.tick = z(dt=np.int64), z(dt=np.int64)
         self.su_cur, self.kd_sev = z(2, dt=np.int64), z(2)
+        self.prep_cur = z(2, dt=np.int64)               # 当前这一拳（或虚晃）的身体预备帧数，起手的前这么多帧是预备
+        self.pre_el = z(2, dt=np.int64)                 # 出这一拳之前已经空闲了几帧（预备没被看出来时，对手看到的还是"一直空闲"）
         self.liver_t, self.winded_t = z(2, dt=np.int64), z(2, dt=np.int64)      # 肝区击倒倒计时（弯腰中）、心窝喘不上气
         self.pivot_heat = z(2)                                                    # 最近轴转的热度（越连续越贵）
         self.nat_scale = np.ones(2)               # 默认护架的系数（1 = 正常；测试里设成 0，隔离其它机制）
-        self.hist = np.zeros((HIST, n, 2, 17))
+        self.hist = np.zeros((HIST, n, 2, 19))
         self.ptr = 0
         self.reset(np.ones(n, bool))
 
@@ -415,8 +438,9 @@ class Sim:
         self.skills = sk
         pk = sk[:, :12].T                                              # [拳, 选手]
         speed = 1.2 - 0.4 * pk                                         # 熟练：起手、收招更快
-        self.su_tab = np.maximum(MIN_SU[:, None], np.floor(SU[:, None] / self.hand[None, :] * speed + 0.5)).astype(np.int64)
-        self.rec_tab = np.maximum(1, np.floor(REC[:, None] / self.hand[None, :] * speed + 0.5)).astype(np.int64)
+        # 起手、收招帧数保留小数，出拳那一刻按概率取整（sround）：手速 1.05 和 1.00 的差别不会被四舍五入抹掉
+        self.su_tab = np.maximum(MIN_SU[:, None], SU[:, None] / self.hand[None, :] * speed)
+        self.rec_tab = np.maximum(1.0, REC[:, None] / self.hand[None, :] * speed)
         self.dmg_mult = 0.8 + 0.4 * pk                                 # 更重
         self.cost_tab = COST[:, None] * (1.2 - 0.4 * pk)               # 更省体能
         self.glance_tab = GLANCE_FRAC * (1.5 - pk)                     # 更准，擦到的区间更窄
@@ -452,7 +476,7 @@ class Sim:
         self.init[mask] = init
         self.luck_seed[mask] = init[:, 5].astype(np.int64)
         self.tick[mask] = 0
-        self.su_cur[mask], self.kd_sev[mask] = 0, 0.0
+        self.su_cur[mask], self.kd_sev[mask], self.prep_cur[mask], self.pre_el[mask] = 0, 0.0, 0, 0
         self.liver_t[mask], self.winded_t[mask] = 0, 0
         self.pivot_heat[mask] = 0.0
         gap, yo, tw = init[:, 0], init[:, 1], init[:, 2]
@@ -501,7 +525,7 @@ class Sim:
         return np.stack([self.pos[..., 0], self.pos[..., 1], self.th, self.hp, self.stun, self.body,
                          self.stam / self.stam_max, self.phase, self.move, self.elapsed, self.guard,
                          self.kd_total, self.comp, self.posture, self.stance, self.tilt > 0,
-                         (self.phase == STARTUP) & self.feint], axis=-1)
+                         (self.phase == STARTUP) & self.feint, self.prep_cur, self.pre_el], axis=-1)
 
     def react_now(self):
         """当前的反应延迟：心态差会反应变慢；低手位看得清；对手的拳露馅（熟练度低、上头）就早一帧看到。"""
@@ -578,6 +602,7 @@ class Sim:
         comp = self.comp.copy()
         tend_def = self.tend_def.copy()
         su_cur, kd_sev, tick = self.su_cur.copy(), self.kd_sev.copy(), self.tick
+        prep_cur, pre_el = self.prep_cur.copy(), self.pre_el.copy()
         doubled_t = (self.liver_t > 0)[:, ::-1]      # 对手正弯着腰（肝区击倒的延迟里），手护着肚子
         liver_fall = self.liver_t == 1               # 延迟到了，这一帧倒下
         liver_t, winded_t = np.maximum(0, self.liver_t - 1), np.maximum(0, self.winded_t - 1)
@@ -713,7 +738,8 @@ class Sim:
         zp = zone_probs(typ, posture[:, ::-1], tired_t, sk_p, glance)
         u_zone = luck(self.luck_seed, tick, 1)
         zone = np.where(head_clean, (u_zone >= zp[..., 0]).astype(np.int64) + (u_zone >= zp[..., 0] + zp[..., 1]), -1)
-        unseen = (su_cur <= react_def + 1) | (ph_t == STARTUP)
+        seen_len = su_cur - prep_cur + prep_seen(prep_cur, self.mind[::-1, 0][None, :])   # 对手从看见到挨上有几帧（看得出预备的更早）
+        unseen = (seen_len <= react_def + 1) | (ph_t == STARTUP)
         impact = np.where(head_clean, impact_of(dealt, typ, np.maximum(zone, 0), unseen), 0.0)
         thr = kd_threshold(self.stun[:, ::-1], self.hp[:, ::-1])
         flash = head_clean & (luck(self.luck_seed, tick, 2) < kd_prob(impact, thr))          # [:, i] = i 把对手打倒
@@ -737,7 +763,8 @@ class Sim:
         stun_add = np.where(head & clean, dealt * STUNK[p] * 1.4 * np.where(counter, COUNTER_STUN, 1.0),
                             np.where(head & blocked, dealt * STUNK[p] * 0.5, 0.0))
         body_add = np.where(~head & landed, dealt * BODYK[p] * BODY_METER * np.where(blocked, 0.3, 1.0), 0.0)
-        stam_loss = (np.where(~head & landed, dealt * BODY_STAM, 0.0) + np.where(blocked, DMG[p] * DMG_SCALE * 0.5, 0.0)
+        # 身体拳扣体能：只有干净打中才按伤害扣；被肘和前臂挡住的只付格挡消耗（调研：护体是挡身体拳的正解，挡比闪容易）
+        stam_loss = (np.where(~head & clean, dealt * BODY_STAM, 0.0) + np.where(blocked, DMG[p] * DMG_SCALE * 0.5, 0.0)
                      + np.where(plexus_hit, dealt * PLEXUS_STAM, 0.0))
         cap_loss = np.where(~head & clean, dealt * 0.4, 0.0)
         hp = np.maximum(0.0, hp - hp_loss[:, ::-1])          # 体力 = 本场累计伤害的反面，到 0 裁判判定无法继续（TKO）
@@ -777,7 +804,7 @@ class Sim:
         def_code = np.where(pulled, M_PULL, np.where(evaded, mv_t, M_NONE))
         offbal = np.where(evaded, OFFBAL[np.minimum(def_code, N_MOVES - 1)], 0)
         ph = np.where(fire, RECOVERY, ph)
-        tm = np.where(fire, self.rec_tab[p, side] + offbal, tm)
+        tm = np.where(fire, np.maximum(1, sround(self.rec_tab[p, side], luck(self.luck_seed, tick, 7))) + offbal, tm)
         el = np.where(fire, 0, el)
         whiff = fire & ~landed
         missed = np.where(fire, whiff, missed)
@@ -859,11 +886,16 @@ class Sim:
         start_p = (free | can_combo) & is_pa & (stam >= self.cost_tab[pa, side])
         quick = np.isin(pa, (0, 1)) * POSTURE_FX[posture, FX_QUICK].astype(int)      # 低手位：刺拳从下面弹出去更快
         slow = (posture == P_LONG) & (IS_POWER[pa] == 1)                            # 长架出重拳要先收前手，有预兆
-        su = np.maximum(MIN_SU[pa], self.su_tab[pa, side] + (fatigue(stam / self.stam_max) >= FAT_SLOW) + (comp < COMP_FREEZE) - quick + slow)
+        su = np.maximum(MIN_SU[pa], sround(self.su_tab[pa, side], luck(self.luck_seed, tick, 6))
+                        + (fatigue(stam / self.stam_max) >= FAT_SLOW) + (comp < COMP_FREEZE) - quick + slow)
+        prep = np.where(can_combo, np.maximum(0, PREP[pa] - PREP_COMBO), PREP[pa])     # 组合拳借前一拳的转腰，预备短
+        su = su + prep
         ph = np.where(start_p, STARTUP, ph)
         mv = np.where(start_p, pa, mv)
         tm = np.where(start_p, su, tm)
         su_cur = np.where(start_p, su, su_cur)
+        prep_cur = np.where(start_p, prep, prep_cur)
+        pre_el = np.where(start_p, el, pre_el)
         feint &= ~start_p
         stam = stam - np.where(start_p, self.cost_tab[pa, side], 0.0)
         el = np.where(start_p, 0, el)
@@ -873,6 +905,8 @@ class Sim:
         ph = np.where(do_feint, STARTUP, ph)
         mv = np.where(do_feint, np.where(a == FEINT_JAB, 0, 2), mv)
         tm = np.where(do_feint, 2, tm)
+        prep_cur = np.where(do_feint, 2, prep_cur)                   # 虚晃就是一段身体预备，看不出预备的人不会被骗
+        pre_el = np.where(do_feint, el, pre_el)
         feint |= do_feint
         stam = stam - np.where(do_feint, self.feint_cost[None, :], 0.0)
         el = np.where(do_feint, 0, el)
@@ -961,7 +995,7 @@ class Sim:
                 - retreat * 0.04 * np.maximum(0.0, drive - 0.3))
         target = np.clip(self.comp_base[None, :] + 5.0 * self.form, 0, 100)
         comp = np.clip(comp + (target - comp) * self.comp_drift[None, :], 0.0, 100.0)
-        resting = np.where(ph == STARTUP, 0.0, np.where((guard > 0) | (ph == DEFEND), 0.5, 1.0))
+        resting = np.where(ph == STARTUP, 0.0, np.where(ph == DEFEND, 0.5, np.where(guard > 0, GUARD_REGEN, 1.0)))
         tense = np.where(comp < COMP_TENSE, 0.8, 1.0)
         regen = self.regen[None, :] * POSTURE_FX[posture, FX_REGEN] * (1.0 + 0.1 * self.form)
         stam = np.clip(stam + regen * resting * tense * np.where(stun > STUN_HURT, 0.5, 1.0)
@@ -1031,6 +1065,7 @@ class Sim:
         self.over = self.over | done
         self.comp, self.tend_def = comp, tend_def
         self.su_cur, self.kd_sev, self.tick = su_cur, kd_sev, self.tick + 1
+        self.prep_cur, self.pre_el = prep_cur, pre_el
         self.liver_t, self.winded_t, self.pivot_heat = liver_t, winded_t, pivot_heat
         self.posture, self.stance, self.tilt = posture, stance, tilt
 
@@ -1112,9 +1147,11 @@ class Sim:
             o[:, 62] = old[:, 5] / 100
             g = 0.05 + 0.15 * (1 - self.mind[i, 0])               # 观察力越好，对体能看得越准
             o[:, 63] = np.round(old[:, 6] / g) * g
-            o[:, 64:73] = eyeP[old[:, 7].astype(int)]
-            o[:, 73:93] = eyeM[np.minimum(old[:, 8].astype(int), OBS_MOVES - 1)]
-            o[:, 93] = old[:, 9] / 12
+            # 出拳前的身体预备（v14）：观察力不够、看不出来的那几帧，当对手还没动（状态、动作、已持续帧数都照"一直空闲"显示）
+            hid = (old[:, 7] == STARTUP) & (old[:, 9] < old[:, 17] - prep_seen(old[:, 17], self.mind[i, 0]))
+            o[:, 64:73] = eyeP[np.where(hid, FREE, old[:, 7]).astype(int)]
+            o[:, 73:93] = eyeM[np.minimum(np.where(hid, M_NONE, old[:, 8]).astype(int), OBS_MOVES - 1)]
+            o[:, 93] = np.where(hid, old[:, 18] + old[:, 9], old[:, 9]) / 12
             o[:, 94:97] = eyeG[old[:, 10].astype(int)]
             ox, oy = old[:, 0], old[:, 1]
             o[:, 97] = np.minimum.reduce([ox - BODY_R, RING - BODY_R - ox, oy - BODY_R, RING - BODY_R - oy]) / RING
@@ -1148,7 +1185,7 @@ class Sim:
             o[:, b + 18:b + 24] = np.eye(N_PLANS)[self.plan[:, i]]
             o[:, b + 24:b + 26] = self.mind[i]
             see_through = np.clip((self.mind[i, 0] - 0.5) * 1.5, 0, 0.75)    # 观察力好的人能看穿一部分虚晃
-            o[:, b + 26] = old[:, 16] * (self.rng.random(n) < see_through)
+            o[:, b + 26] = old[:, 16] * ~hid * (self.rng.random(n) < see_through)
             o[:, b + 27] = self.holds[:, i] / HOLDS_WARN                # 这回合抱了几次（裁判警告是公开的）
             o[:, b + 28] = self.holds[:, j] / HOLDS_WARN
         return out

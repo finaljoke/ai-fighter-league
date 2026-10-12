@@ -36,16 +36,17 @@ def make_n(n, gap=1.0, n_rounds=1):
     return s
 
 
-def run_n(s, a0, ticks, hold1=B.STAY):
-    """n 场同时按帧给 0 号动作（{帧: 动作}），1 号一直 hold1。"""
+def run_n(s, a0, ticks, hold1=B.STAY, a1=None):
+    """n 场同时按帧给 0 号动作（{帧: 动作}），1 号按 a1 给、没写的帧 hold1。"""
     infos = []
+    a1 = a1 or {}
     for t in range(ticks):
-        act = np.tile([[a0.get(t, B.STAY), hold1]], (s.n, 1))
+        act = np.tile([[a0.get(t, B.STAY), a1.get(t, hold1)]], (s.n, 1))
         infos.append(s.step(act)[2])
     return infos
 
 
-def nat_rate(post, punch, gap=1.0, n=1200, opp_southpaw=False, hold1=B.STAY, tired=False):
+def nat_rate(post, punch, gap=1.0, n=1200, opp_southpaw=False, hold1=B.STAY, tired=False, a1=None):
     s = make_n(n, gap=gap)
     s.nat_scale[:] = 1.0
     s.posture[:, 1] = post
@@ -53,7 +54,7 @@ def nat_rate(post, punch, gap=1.0, n=1200, opp_southpaw=False, hold1=B.STAY, tir
         s.stance[:, 0] = -1.0
     if tired:
         s.stam[:, 1] = 0.1 * s.stam_max[1]
-    inf = run_n(s, {0: punch}, ticks=12, hold1=hold1)
+    inf = run_n(s, {0: punch}, ticks=12, hold1=hold1, a1=a1)
     oc = np.array([i["outcome"][:, 0] for i in inf])
     reached = (oc == 1) | (oc == 2)
     return float((oc == 2).sum() / max(1, reached.sum()))
@@ -92,7 +93,7 @@ def punch_vs(punch, gap, defense_hold=B.STAY, defense_at=None, defense=None):
 
 
 def fire_tick(punch):
-    return int(B.SU[punch - B.PUNCH0])
+    return int(B.SU[punch - B.PUNCH0] + B.PREP[punch - B.PUNCH0])     # 身体预备 + 胳膊打出去
 
 
 # ------------------------------------------------------------------ 进攻
@@ -176,21 +177,21 @@ d2, o2, _ = punch_vs(B.LHOOK_H, 0.7, defense_at=1, defense=B.SLIP)
 check("侧闪躲开头部直拳；勾拳闪不掉", d == 0 and o == [3] and d2 > 0, f"直拳 {d:.1f} 结果 {o}，勾拳 {d2:.1f}")
 
 s = make(1.0)
-inf = run(s, {0: B.JAB_H}, {1: B.SLIP}, ticks=4)
+inf = run(s, {0: B.JAB_H}, {1: B.SLIP}, ticks=fire_tick(B.JAB_H) + 1)
 rec_slipped = int(s.timer[0, 0])
 s = make(2.0)
-run(s, {0: B.JAB_H}, ticks=4)
+run(s, {0: B.JAB_H}, ticks=fire_tick(B.JAB_H) + 1)
 rec_whiff = int(s.timer[0, 0])
 check("被侧闪躲开后，进攻方多 2 帧收招（反击窗口）", rec_slipped == rec_whiff + 2, f"被闪 {rec_slipped} 帧，打空 {rec_whiff} 帧")
 
-d, o, _ = punch_vs(B.LHOOK_H, 0.7, defense_at=1, defense=B.DUCK)
+d, o, _ = punch_vs(B.LHOOK_H, 0.7, defense_at=1 + B.PREP[B.LHOOK_H - B.PUNCH0], defense=B.DUCK)
 d_free, _, _ = punch_vs(B.LUPPER_H, 0.7)
-d_duck, _, _ = punch_vs(B.LUPPER_H, 0.7, defense_at=1, defense=B.DUCK)
+d_duck, _, _ = punch_vs(B.LUPPER_H, 0.7, defense_at=1 + B.PREP[B.LUPPER_H - B.PUNCH0], defense=B.DUCK)
 check("下潜从勾拳下面钻过；但撞上上勾拳伤害 ×1.4", d == 0 and o == [3] and abs(d_duck - 1.4 * d_free) < 1e-6,
       f"勾拳 {d:.1f}，上勾拳 {d_duck:.2f} vs {d_free:.2f}")
 
 s = make(1.0)
-inf = run(s, {0: B.CROSS_H}, {3: B.PARRY}, ticks=6)
+inf = run(s, {0: B.CROSS_H}, {3 + B.PREP[B.CROSS_H - B.PUNCH0]: B.PARRY}, ticks=6 + B.PREP[B.CROSS_H - B.PUNCH0])
 d_par = dealt(inf)
 rec_par = int(s.timer[0, 0])
 d_par_hook, _, _ = punch_vs(B.LHOOK_H, 0.7, defense_at=1, defense=B.PARRY)
@@ -208,7 +209,7 @@ check("背靠围绳后仰不了", dealt(inf) > 0, f"伤害 {dealt(inf):.1f}")
 
 # 角度：站在对手正面线外，他的格挡打折
 s = make(1.0)
-inf = run(s, {0: B.JAB_H}, ticks=3, hold1=B.GUARD_HIGH)
+inf = run(s, {0: B.JAB_H}, ticks=3 + B.PREP[B.JAB_H - B.PUNCH0], hold1=B.GUARD_HIGH)
 s.th[0, 1] = np.pi + np.radians(40)      # 出拳前一帧，1 号的朝向被甩开 40°（比如被轴转绕到侧面）
 inf += run(s, {}, ticks=8, hold1=B.GUARD_HIGH)
 d_angle = dealt(inf)
@@ -313,8 +314,8 @@ check("一回合第 3 次倒地 = TKO", end and end[0]["method"][0] == B.M_TKO, 
 
 s = make(1.0, x0=B.RING - B.BODY_R - 1.0)       # 受伤的一方被困在围绳上
 s.stun[0, 1] = 85
-a = {k * 8: B.JAB_H for k in range(10)}
-inf = run(s, a, ticks=85)
+a = {k * 10: B.JAB_H for k in range(10)}
+inf = run(s, a, ticks=105)
 end = [i for i in inf if i["done"][0]]
 landed_before = sum(i["outcome"][0, 0] == 1 for i in inf[:end[0]["round"][0] * 0 + [t for t, i in enumerate(inf) if i["done"][0]][0] + 1]) if end else 0
 check("受伤后连续挨 8 拳不还手也不防，裁判终止 = TKO", end and end[0]["method"][0] == B.M_TKO and s.kd_total[0, 1] == 0 and landed_before >= B.UNANSWERED_STOP,
@@ -406,7 +407,7 @@ check("心态差反应变慢：低于 40 慢 1 帧，低于 20 慢 2 帧", (r_lo
 s = make(1.0)
 s.comp[0, 0] = 10
 run(s, {0: B.JAB_H}, ticks=1)
-check("心态崩了出拳犹豫：起手多 1 帧", int(s.timer[0, 0]) == int(s.su_tab[0, 0]) + 1, f"起手 {s.timer[0, 0]} 帧")
+check("心态崩了出拳犹豫：起手多 1 帧", int(s.timer[0, 0]) == int(s.su_tab[0, 0]) + 1 + B.PREP[B.JAB_H - B.PUNCH0], f"起手 {s.timer[0, 0]} 帧")
 
 s = make(0.9, x0=B.RING - B.BODY_R - 0.9)
 run(s, {}, ticks=60)
@@ -520,7 +521,7 @@ s.posture[0, 0] = B.P_LOW
 run(s, {0: B.JAB_H}, ticks=1)
 r_low = s.react_now()[0, 0]
 check("低手位：刺拳快 1 帧、反应快 1 帧，但举架挡不住",
-      int(s.timer[0, 0]) == int(s.su_tab[0, 0]) - 1 and r_low == STD.react_ticks - 1 and g_low > 3 * g_std,
+      int(s.timer[0, 0]) == int(s.su_tab[0, 0]) - 1 + B.PREP[B.JAB_H - B.PUNCH0] and r_low == STD.react_ticks - 1 and g_low > 3 * g_std,
       f"刺拳起手 {s.timer[0, 0]} 帧，反应 {r_low} 帧，举架挨后手 {g_low:.2f} vs {g_std:.2f}")
 
 s = make(1.0)
@@ -556,7 +557,7 @@ def comp_drop(courage):
     s.th[0] = [0, np.pi]
     s.hist[:] = s._snapshot()[None]
     c0 = s.comp[0, 1]
-    run(s, {0: B.CROSS_H}, ticks=7)
+    run(s, {0: B.CROSS_H}, ticks=7 + B.PREP[B.CROSS_H - B.PUNCH0])
     return c0 - s.comp[0, 1]
 check("性格·胆量：胆小的挨同一拳心态掉得多", comp_drop(0.2) > 1.5 * comp_drop(0.8), f"胆小掉 {comp_drop(0.2):.1f}，胆大掉 {comp_drop(0.8):.1f}")
 
@@ -644,12 +645,16 @@ def view_precision(obs):
 check("观察力：眼尖的人对对手体能看得更准", view_precision(0.95) < view_precision(0.1), f"误差 {view_precision(0.1):.3f} → {view_precision(0.95):.3f}")
 
 def lapse_rate(iq, comp=80):
+    """每分钟出几次昏招（2000 场 × 200 帧抽样）。"""
     s = B.Sim(2000, (minded(iq=iq), STD), auto_reset=False)
     s.comp[:, 0] = comp
-    _, hit = B.lapse(np.zeros((2000, 2), int), None, s, np.random.default_rng(0))
-    return hit[:, 0].mean()
+    rng = np.random.default_rng(0)
+    hits = sum(B.lapse(np.zeros((2000, 2), int), None, s, rng)[1][:, 0].mean() for _ in range(200)) / 200
+    return hits * 60 / B.DT
 check("拳商：拳商低的人出昏招多，心态崩了更多", lapse_rate(0.1) > 2 * lapse_rate(0.8) and lapse_rate(0.1, comp=30) > 1.6 * lapse_rate(0.1),
-      f"拳商 0.8 {lapse_rate(0.8):.1%}，拳商 0.1 {lapse_rate(0.1):.1%}，拳商 0.1 且心态差 {lapse_rate(0.1, comp=30):.1%}")
+      f"每分钟 拳商 0.8 {lapse_rate(0.8):.1f} 次，拳商 0.1 {lapse_rate(0.1):.1f} 次，拳商 0.1 且心态差 {lapse_rate(0.1, comp=30):.1f} 次")
+check("昏招按秒算：拳商 0.5 的普通人每分钟三四次，一回合几次（v14；原来按帧算，一分钟 70 多次）", 3.0 < lapse_rate(0.5) < 4.5,
+      f"每分钟 {lapse_rate(0.5):.1f} 次")
 
 
 # ------------------------------------------------------------------ 平衡：弯臂拳、致命度
@@ -777,7 +782,7 @@ def tko_cause_of(setup, a0, ticks, x0=None):
 
 
 c_hp = tko_cause_of(lambda s: s.hp.__setitem__((0, 1), 0.5), {0: B.JAB_B}, 10)      # 打身体：不会一拳击倒，只看体力归零
-c_un = tko_cause_of(lambda s: s.stun.__setitem__((0, 1), 85), {k * 8: B.JAB_H for k in range(10)}, 85, x0=B.RING - B.BODY_R - 1.0)
+c_un = tko_cause_of(lambda s: s.stun.__setitem__((0, 1), 85), {k * 10: B.JAB_H for k in range(10)}, 105, x0=B.RING - B.BODY_R - 1.0)
 c_kd = tko_cause_of(lambda s: (s.stun.__setitem__((0, 1), 99), s.kd_round.__setitem__((0, 1), 2), s.kd_total.__setitem__((0, 1), 2)),
                     {0: B.CROSS_H}, 10)
 check("体力（累计伤害）归零 = 裁判判定无法继续 = TKO；TKO 记下原因（1 体力归零、2 受伤后连续挨打不还手、3 一回合倒三次）",
@@ -968,10 +973,10 @@ def one_tick_cost(gap, action):
 
 
 d_still = dealt(run(make(1.0), {0: B.JAB_H}, ticks=8))
-d_sw = dealt(run(make(1.0), {0: B.JAB_H}, {0: B.SWITCH_STANCE}, ticks=8))
-d_po = dealt(run(make(1.0), {0: B.JAB_H}, {0: B.CHANGE_POSTURE}, ticks=8))
+d_sw = dealt(run(make(1.0), {0: B.JAB_H}, {B.PREP[B.JAB_H - B.PUNCH0]: B.SWITCH_STANCE}, ticks=8))
+d_po = dealt(run(make(1.0), {0: B.JAB_H}, {B.PREP[B.JAB_H - B.PUNCH0]: B.CHANGE_POSTURE}, ticks=8))
 c_sw, c_po = one_tick_cost(2.0, B.SWITCH_STANCE), one_tick_cost(2.0, B.CHANGE_POSTURE)
-r_switch = nat_rate(B.P_STANDARD, B.JAB_H, hold1=B.SWITCH_STANCE)
+r_switch = nat_rate(B.P_STANDARD, B.JAB_H, a1={B.PREP[B.JAB_H - B.PUNCH0]: B.SWITCH_STANCE})
 check("换站架、换架势要花体能；换的那几帧重心不稳（挨打 ×1.3），也没有默认护架",
       abs(c_sw - B.STANCE_COST) < 1e-6 and abs(c_po - B.POSTURE_COST) < 1e-6 and abs(d_sw - 1.3 * d_still) < 1e-6
       and abs(d_po - 1.3 * d_still) < 1e-6 and r_switch < 0.05,
@@ -1031,6 +1036,87 @@ d_native = dealt(run(make(1.0), {0: B.CROSS_H}, ticks=10))
 check("弱侧打不好：不在本来站架时出拳伤害打折，练过换站架的打折少",
       abs(off_stance(0.5) - 0.875 * d_native) < 1e-6 and off_stance(0.0) < off_stance(0.5) < off_stance(1.0) and abs(off_stance(1.0) - d_native) < 1e-6,
       f"本来站架 {d_native:.2f}；弱侧 换站架熟练度 0 / 0.5 / 1：{off_stance(0.0):.2f} / {off_stance(0.5):.2f} / {off_stance(1.0):.2f}")
+
+
+# ------------------------------------------------------------------ 体能账、出拳预备、手速（v14）
+def body_jab_bill(hold1):
+    """0 号打一记身体刺拳：(0 号花的体能, 1 号被扣的体能, 1 号挨的伤害)。两人体能都设在一半，关掉自然回复只看这一拳的账。"""
+    s = make(0.8)
+    s.stam[0] = 0.5 * s.stam_max
+    s.regen[:] = 0.0
+    st0 = s.stam[0].copy()
+    inf = run(s, {0: B.JAB_B}, ticks=fire_tick(B.JAB_B) + 1, hold1=hold1)
+    return float(st0[0] - s.stam[0, 0]), float(st0[1] - s.stam[0, 1]), dealt(inf)
+
+
+sp_open, lost_open, d_open = body_jab_bill(B.STAY)
+sp_blk, lost_blk, d_blk = body_jab_bill(B.GUARD_BODY)
+check("身体拳干净打中，按伤害扣体能；被护体架挡住只付格挡消耗，比出拳的人花得少（v14）",
+      lost_open >= d_open / 0.7 * B.BODY_STAM - 1e-6 and lost_blk < sp_blk and lost_blk < 0.2 * lost_open,
+      f"出拳花 {sp_blk:.2f}；不挡被扣 {lost_open:.2f}，挡住被扣 {lost_blk:.2f}")
+
+
+def regen_over(hold, ticks=40):
+    s = make(3.0)
+    s.stam[0, 1] = 0.3 * s.stam_max[1]
+    st0 = s.stam[0, 1]
+    run(s, {}, ticks=ticks, hold1=hold)
+    return float(s.stam[0, 1] - st0)
+
+
+r_free, r_guard = regen_over(B.STAY), regen_over(B.GUARD_HIGH)
+check("举着架子体能照样回，只是慢一点（×0.75，不再减半）（v14）", abs(r_guard - B.GUARD_REGEN * r_free) < 1e-6, f"站着回 {r_free:.2f}，举架回 {r_guard:.2f}")
+
+check("出拳前的身体预备：后手直拳从身体开始动到打到约 350 毫秒、后手勾拳约 450 毫秒，刺拳只预备 1 帧（v14）",
+      abs(fire_tick(B.CROSS_H) * B.DT - 0.35) < 0.026 and abs(fire_tick(B.RHOOK_H) * B.DT - 0.45) < 0.026 and B.PREP[0] == 1,
+      f"刺拳 {fire_tick(B.JAB_H) * B.DT * 1000:.0f}、后手直拳 {fire_tick(B.CROSS_H) * B.DT * 1000:.0f}、后手勾拳 {fire_tick(B.RHOOK_H) * B.DT * 1000:.0f} 毫秒")
+
+
+def seen_startup(obs, attack=B.CROSS_H):
+    """1 号的观察力是 obs：0 号刚开始预备的那一帧，经过反应延迟传到 1 号眼里时，1 号看到的对手状态是不是"起手"。"""
+    reader = Body("R", "读", reach=0.75, mass=75, power=1.0, hand_speed=1.0, foot_speed=1.0, cardio=1.0, chin=1.0,
+                  react_ticks=3, mind={"观察力": obs})
+    s = B.Sim(1, (STD, reader), auto_reset=False, n_rounds=1)
+    s.pos[0] = [[C - 1.5, C], [C + 1.5, C]]
+    s.th[0] = [0.0, np.pi]
+    s.hist[:] = s._snapshot()[None]
+    run(s, {0: attack}, ticks=s.react_now()[0, 1] + 1)
+    o = s.observe()[0, 1]
+    return bool(o[64 + B.STARTUP] > 0.5), float(o[93])
+
+
+see_hi, see_lo, idle = seen_startup(0.85), seen_startup(0.25), seen_startup(0.25, B.STAY)
+check("观察力高的人看得出出拳前的身体预备：同一刻，观察力 0.85 已经看到对手在起手，0.25 看到的和对手一直空闲一模一样（v14）",
+      see_hi[0] and see_lo == idle, f"0.85 看到起手 {see_hi[0]}；0.25 看到 {see_lo}，对手真空闲时看到 {idle}")
+f_hi, f_lo = seen_startup(0.85, B.FEINT_CROSS), seen_startup(0.25, B.FEINT_CROSS)
+check("虚晃就是一段身体预备：看得出预备的人才会看到、才会被骗（v14）", f_hi[0] and not f_lo[0], f"0.85 看到 {f_hi[0]}，0.25 看到 {f_lo[0]}")
+
+s = make(2.5)
+run(s, {0: B.JAB_H}, ticks=fire_tick(B.JAB_H) + 1)
+while s.timer[0, 0] * 2 > s.rec_tab[0, 0]:          # 等到刺拳收招进了能接拳的窗口
+    run(s, {}, ticks=1)
+run(s, {0: B.CROSS_H}, ticks=1)                    # 刺拳收招里接后手直拳（组合拳）
+su_combo = int(s.timer[0, 0])
+s = make(2.5)
+run(s, {0: B.CROSS_H}, ticks=1)
+su_single = int(s.timer[0, 0])
+check("组合拳的后一拳借前一拳收回时的转腰发力，预备少 2 帧（v14）", su_single - su_combo == min(B.PREP_COMBO, B.PREP[2]),
+      f"单出后手直拳起手 {su_single} 帧，接在刺拳后面 {su_combo} 帧")
+
+
+def mean_startup(hand, n=4000):
+    b = Body("H", "手", reach=0.75, mass=75, power=1.0, hand_speed=hand, foot_speed=1.0, cardio=1.0, chin=1.0, react_ticks=3)
+    s = B.Sim(n, (b, STD), auto_reset=False, n_rounds=1)
+    s.pos[:, 0] = [C - 1.5, C]
+    s.pos[:, 1] = [C + 1.5, C]
+    s.th[:] = [0.0, np.pi]
+    s.step(np.tile([[B.CROSS_H, B.STAY]], (n, 1)))
+    return float(s.timer[:, 0].mean())
+
+
+m100, m105 = mean_startup(1.00), mean_startup(1.05)
+check("手速的小差别也算数：起手帧数按概率取整，手速 1.05 的后手直拳平均起手比 1.00 的短约 5%（v14）",
+      abs((m100 - m105) - (B.SU[2] - B.SU[2] / 1.05)) < 0.06, f"手速 1.00：{m100:.2f} 帧，1.05：{m105:.2f} 帧")
 
 
 if __name__ == "__main__":
