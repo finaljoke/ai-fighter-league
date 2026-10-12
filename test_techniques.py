@@ -688,8 +688,8 @@ check("刺拳只刺一下：挨了一记刺拳后来得及把架子举起来挡�
 
 r_sj, r_sb = nat_rate(B.P_STANDARD, B.JAB_H), nat_rate(B.P_STANDARD, B.JAB_B)
 r_busy, r_tired = nat_rate(B.P_STANDARD, B.JAB_H, hold1=B.JAB_H), nat_rate(B.P_STANDARD, B.JAB_H, tired=True)
-check("默认护架：站着时刺拳约一半打在拳套上、身体拳约四成打在手肘上（都算被挡）；自己正在出拳时挡不住；累了手慢慢掉（体能一成时挡三成左右）",
-      abs(r_sj - 0.5) < 0.05 and abs(r_sb - 0.4) < 0.05 and r_busy < 0.05 and 0.26 < r_tired < 0.40,
+check("默认护架：站着时刺拳约一半打在拳套上、身体拳约四成打在手肘上（都算被挡）；自己一直在出拳时只剩另一只手护着（约减半，v15）；累了手慢慢掉（体能一成时挡三成左右）",
+      abs(r_sj - 0.5) < 0.05 and abs(r_sb - 0.4) < 0.05 and 0.18 < r_busy < 0.35 and 0.26 < r_tired < 0.40,
       f"刺拳 {r_sj:.0%}、身体刺拳 {r_sb:.0%} 被挡；自己在出拳时 {r_busy:.0%}，体能一成时 {r_tired:.0%}")
 r_pj, r_pc, r_pco = nat_rate(B.P_LOW, B.JAB_H), nat_rate(B.P_LOW, B.CROSS_H), nat_rate(B.P_LOW, B.CROSS_H, opp_southpaw=True)
 check("低手位（肩卷）：前肩卸掉约六成后手直拳，刺拳只挡一成；对反架对手效果减半",
@@ -1117,6 +1117,18 @@ def mean_startup(hand, n=4000):
 m100, m105 = mean_startup(1.00), mean_startup(1.05)
 check("手速的小差别也算数：起手帧数按概率取整，手速 1.05 的后手直拳平均起手比 1.00 的短约 5%（v14）",
       abs((m100 - m105) - (B.SU[2] - B.SU[2] / 1.05)) < 0.06, f"手速 1.00：{m100:.2f} 帧，1.05：{m105:.2f} 帧")
+
+
+def jab_ceiling(cardio, skill, regen_fx=1.0):
+    """只打刺拳、体能是唯一限制时每分钟能撑几拳：起手那几帧不回体能，其余时间都在回。"""
+    regen_tick = B.STAM_REGEN * cardio * regen_fx * B.DT
+    su = B.SU[0] + B.PREP[0]
+    return regen_tick * 60 / B.DT / (B.COST[0] * (1.2 - 0.4 * skill) + su * regen_tick)
+
+
+c_avg, c_max = jab_ceiling(1.0, 0.5), jab_ceiling(1.25, 1.0, B.POSTURE_FX[B.P_LOW, B.FX_REGEN])
+check("刺拳的体能账（v15）：普通人只打刺拳每分钟约 30 拳；体能、熟练度拉满又站低手位，约 48 拳，接近有记录以来一整场的最高出拳量（每分钟 46.5）",
+      27 < c_avg < 33 and 44 < c_max < 52, f"普通人 {c_avg:.1f} 拳/分，拉满 {c_max:.1f} 拳/分")
 
 
 if __name__ == "__main__":

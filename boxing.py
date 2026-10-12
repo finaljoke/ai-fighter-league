@@ -7,7 +7,7 @@
 """
 import numpy as np
 
-SIM_VERSION = "box2d-v14"
+SIM_VERSION = "box2d-v15"
 
 DT = 0.05
 RING = 6.1
@@ -80,7 +80,10 @@ TGT = np.array([0,     1,    0,    1,    0,     1,     0,     1,     0,     1,  
 SU = np.array([3,      4,    5,    6,    4,     5,     6,     6,     4,     5,     5,     6])
 REC = np.array([5,     6,    8,    9,    8,     8,     10,    10,    8,     8,     10,    10])
 DMG = np.array([4.0,   4,    11,   10,   11,    10,    13,    12,    9,     9,     12,    11])
-COST = np.array([3.0,  3,    7,    7,    7,     7,     9,     9,     6,     6,     8,     8])
+COST = np.array([4.5,  4.5,  7,    7,    7,     7,     9,     9,     6,     6,     8,     8])
+# 刺拳 4.5（v15，原来 3）：体能、熟练度都拉满的人只打刺拳，每分钟最多约 48 拳，接近有记录以来一整场的最高出拳量
+# （CompuBox：Margarito 对 Clottey 12 回合 1675 拳，每分钟 46.5）；普通人约 30 拳（Mayweather 单回合最高 95 拳、
+# 重量级出拳最多的 Kownacki 场均每回合 87 拳，都是每分钟 30 上下）。原来普通人只打刺拳能一直撑每分钟 43 拳
 RNG = np.array([1.00,  0.95, 0.98, 0.92, 0.70,  0.65,  0.72,  0.68,  0.55,  0.52,  0.58,  0.55])
 STUNK = np.array([0.8, 0,    1.0,  0,    1.4,   0,     1.4,   0,     1.3,   0,     1.5,   0])
 BODYK = np.array([0.0, 1.0,  0,    1.2,  0,     1.6,   0,     1.4,   0,     1.2,   0,     1.3])
@@ -104,6 +107,7 @@ NAT_BLOCK = np.array([[0.50, 0.50, 0.30, 0.10, 0.40],     # 标准高位：护�
                       [0.50, 0.50, 0.50, 0.00, 0.60],     # 低姿抱架：拳贴颊、肘贴身；上勾拳是克星
                       [0.10, 0.60, 0.30, 0.00, 0.30]])    # 低手位（肩卷）：前肩卸后手直拳，后手接勾拳；怕刺拳
 NAT_BLOCK_DMG = 0.3                       # 打在拳套、手肘上还剩的伤害
+NAT_PUNCHING = 0.5                        # 自己正在出拳：出拳那只手护不了，另一只手照样贴着下巴、肘贴着肋（调研：出拳间隙不留空档），默认护架减半（v15，原来整个没有）
 PHILLY_OPEN = 0.5                         # 肩卷对反架对手效果减半（Mayweather 对左撇子会改用常规护架）
 BODY_DIP_EXPOSED = 1.2                    # 出身体拳时屈膝降重心，下巴靠近对手后手：这时头部挨打 ×1.2
 OFF_STANCE_DMG, OFF_STANCE_GLANCE = 0.25, 0.5   # 不在本来站架：伤害 ×(0.75 + 0.25 × 换站架熟练度)，擦到的区间 ×(1.5 − 0.5 × 熟练度)
@@ -694,7 +698,8 @@ class Sim:
         gsc = gsc * (1.0 - FAT_HIGH_GUARD * tired_t)
         gm = np.where(gm < 1.0, np.clip(1.0 - (1.0 - gm) * gsc, 0.02, 1.0), gm)
         switching_t = (ph_t == MOVING) & np.isin(mv_t, (M_POSTURE, M_STANCE))      # 正在换架势 / 换站架，重心不稳
-        natural = (gtype == 0) & np.isin(ph_t, (FREE, MOVING)) & ~doubled_t & ~switching_t
+        punching_t = np.isin(ph_t, (STARTUP, RECOVERY)) & (mv_t < 12)              # 防守方自己正在出拳（含虚晃）
+        natural = (gtype == 0) & (np.isin(ph_t, (FREE, MOVING)) | punching_t) & ~doubled_t & ~switching_t
         m = np.where(is_def, EVADE_MULT[np.minimum(mv_t, N_MOVES - 1), cls], gm)
         eff = np.where(np.abs(off_t) > ANG_GUARD, 0.5, 1.0) * np.where(stun_t > STUN_HURT, 0.5, 1.0)
         m = np.where(m < 1.0, 1.0 - (1.0 - m) * eff, m)
@@ -703,7 +708,8 @@ class Sim:
         post_d = posture[:, ::-1]
         p_nat = (NAT_BLOCK[post_d, ncat] * np.where((post_d == P_LOW) & open_st[:, None], PHILLY_OPEN, 1.0)
                  * np.where(tgt == 1, gs[None, :, 1], gs[None, :, 0]) * eff * self.nat_scale[::-1][None, :]
-                 * (1.0 - FAT_GUARD * tired_t))                              # 累了手慢慢掉下来
+                 * (1.0 - FAT_GUARD * tired_t)                               # 累了手慢慢掉下来
+                 * np.where(punching_t, NAT_PUNCHING, 1.0))                  # 自己在出拳：只剩另一只手护着
         nat_block = natural & (luck(self.luck_seed, tick, 5) < p_nat)
         m = np.where(nat_block, NAT_BLOCK_DMG, m)
         evaded = reach_ok & is_def & (m <= 1e-6)
