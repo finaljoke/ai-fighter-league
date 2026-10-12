@@ -15,6 +15,9 @@ import bodies as BD
 import boxing as B
 import boxing_league as BL
 from analyze import load_run
+from boxing_bots import BoxingSparring
+from nets import load_policy
+from train import MILESTONES
 
 # 角色卡（人设摘要、台词、立绘位置）放在本地 characters/roster.json：合伙人的素材，不进仓库
 CHARS = json.load(open(os.path.join("characters", "roster.json"), encoding="utf-8"))
@@ -86,10 +89,16 @@ def best_window(frames, secs=9.0):
     return int(np.argmax(sums))
 
 
-def growth_clips(runs, milestones, coach):
-    """成长片段：正史可能分几段训练档接着练，把各段的成长档案按轮数接起来挑。"""
-    vs = lambda it: "（对陪练教练）" if it <= coach else ""
-    items = []                                                   # (轮数, 训练档, 版本)
+CLIP = 8.0                    # 每段成长片段的秒数
+LEAD = 5.0                    # 重演片段里，里程碑那一下出现在第几秒
+# 进成长片段的里程碑：只要击倒和提前结束比赛这类大事，数字越大越重要
+BIG = {"第一次 KO 获胜": 5, "第一次 TKO 获胜": 4, "第一次肝区击倒": 3, "第一次一拳打中下颌把人打倒": 2, "第一次打倒对手": 1}
+TESTS = dict(MILESTONES)
+
+
+def growth_items(runs):
+    """各段训练档的成长档案按轮数接起来：[(轮数, 训练档, 版本), ...]（接着练的那段，开头那个版本和上一段最后一个是同一个，跳过）。"""
+    items = []
     for run in runs:
         gdir = os.path.join(run["dir"], "growth")
         for f in sorted(os.listdir(gdir)):
@@ -97,43 +106,146 @@ def growth_clips(runs, milestones, coach):
                 g = json.load(open(os.path.join(gdir, f), encoding="utf-8"))
                 if not items or g["iter"] > items[-1][0]:
                     items.append((g["iter"], run, int(f[1:5])))
+    return items
+
+
+def pick_milestones(milestones, n=5, gap=30):
+    """同一个人 gap 轮之内接连发生的几件大事归成一组（第一次击倒、第一次 KO 往往挨着），一组只放一段，最多 n 组。
+    组里按重要程度排好：最大的那件重演不出来（比如一拳下颌击倒太少见），就退一步重演次一级的。"""
+    groups = []
+    for m in sorted((m for m in milestones if m["event"] in BIG), key=lambda m: m["iter"]):
+        g = next((g for g in reversed(groups) if g[0]["char"] == m["char"]), None)
+        if g and m["iter"] - g[-1]["iter"] <= gap:
+            g.append(m)
+        else:
+            groups.append([m])
+    return [sorted(g, key=lambda m: -BIG[m["event"]]) for g in groups[:n]]
+
+
+def archive_clip(item, caption, voice, coach):
+    """存档录像：存档节点另打的那几场，挑最热闹的一段。"""
+    it, run, v = item
+    g = json.load(open(os.path.join(run["dir"], "growth", f"v{v:04d}.json"), encoding="utf-8"))
+    rec = g["replays"][0]
+    frames = BL.resimulate(rec)
+    sub = f"已对打 {g['fights']} 场"
+    ev = next((e for e in run["evals"] if e["version"] == v), None)
+    if ev:
+        rate = [ev.get(f"{b['id']}_vs_S", {}).get("punch_rate", 0) for b in rec["bodies"]]
+        sub += f" · 每 10 秒出拳 {rate[0]:.0f} / {rate[1]:.0f}"
+    return {"kind": "archive", "iter": it, "fights": g["fights"], "frames": frames, "bodies": rec["bodies"],
+            "from": best_window(frames, CLIP), "dur": CLIP, "speed": 1, "capAt": 0.3,
+            "when": f"训练第 {it} 轮" if it else "第 0 轮 · 出生",
+            "when_sub": sub + ("　· 启蒙期：跟陪练教练学" if 0 < it <= coach else ""), "caption": caption, "voice": voice}
+
+
+def reenact(m, runs, items, coach, cache):
+    """里程碑重演：训练里那一场没有录像，用当时的出招网络（新训练档里程碑时另存了一份；
+    旧档用里程碑之后最近的存档版本）按当时的对手重新打，直到同样的事发生，挑第一场存档。以后重新生成只读存档。"""
+    key = f"{m['char']}|{m['event']}|{m['iter']}"
+    if key in cache:
+        return cache[key]
+    run = next(r for r in runs if r["name"] == m["_run"])
+    ids = run["cfg"]["args"]["bodies"].split(",")                  # 训练时的左右（第 0 方、第 1 方）
+    bodies = tuple(body_of(c) for c in ids)
+    k = ids.index(m["char"])
+    if "snap" in m:                                                 # 新训练档：里程碑那一刻的出招网络
+        pols = {}
+        for c in ids:
+            f = m["snap"]["files"][c]
+            pols[c] = load_policy(os.path.join(run["dir"], "ckpt", f["file"]))
+            assert pols[c].sha256() == f["sha256"], f"{f['file']} 哈希对不上，存档被改过"
+        skills, src_iter, src = np.array(m["snap"]["skills"]), m["iter"], "里程碑当时的出招网络"
+        vs_list = [m["vs"]]
+    else:                                                           # 旧训练档：之后最近的存档版本
+        src_iter, vrun, v = next((x for x in items if x[0] >= m["iter"]), items[-1])
+        R = load_run(vrun["name"], v)
+        pols, skills, src = R["pols"], np.stack([R["pick"][c]["skills"] for c in ids]), f"第 {src_iter} 轮存档"
+        run = vrun
+        vs_list = ["coach"] if m["iter"] <= coach else ["self", "coach"]  # 旧档没记对手：启蒙期之后先试对方同期版本
+    test = TESTS[m["event"]]
+    for vs in vs_list:
+        ctrls = [pols[c] for c in ids]
+        if vs == "coach":
+            ctrls[1 - k] = BoxingSparring()
+        elif vs.startswith("v"):
+            ctrls[1 - k] = load_run(run["name"], int(vs[1:]))["pols"][ids[1 - k]]
+        for batch in range(6):
+            n, seed = 24, 70_000 + 97 * m["iter"] + 1000 * batch
+            hit = np.full(n, -1)
+
+            def on_step(t, info, alive):
+                h = np.asarray(test(info, k)) & alive & (hit < 0)
+                hit[h] = t
+            bt = BL.run_matches(bodies, ctrls, tuple(ids), n, seed=seed, skills=skills, plans=None, on_step=on_step)
+            if (hit < 0).all():
+                continue
+            i = int(np.flatnonzero(hit >= 0)[0])
+            names = [{"name": BoxingSparring.name} if (vs == "coach" and j != k) else {"name": body_of(c).label} for j, c in enumerate(ids)]
+            rec = BL.replay_record(bt, i, names)
+            # 镜头对准倒下的那一下：肝区击倒要过 1~2 秒才倒；KO、TKO 对准最后一次倒地（离结束不远的话）
+            kd = bt.fields["kd"][:, i, 1 - k]
+            focus = int(hit[i])
+            after = np.flatnonzero(kd[focus:])
+            if m["event"] == "第一次肝区击倒" and after.size:
+                focus += int(after[0])
+            elif m["event"] in ("第一次 KO 获胜", "第一次 TKO 获胜"):
+                before = np.flatnonzero(kd[:focus + 1])
+                if before.size and focus - before[-1] <= 6 * 20:
+                    focus = int(before[-1])
+            out = {"rec": rec, "focus": focus, "vs": vs, "src": src, "src_iter": int(src_iter), "seed": seed, "index": i}
+            cache[key] = out
+            return out
+    print(f"  没能重演：{m['name']} {m['event']}（训练第 {m['iter']} 轮）")
+    cache[key] = None                                               # 重演不出来也记下，下次不再白打
+    return None
+
+
+def reenact_clip(m, r, nick):
+    frames = BL.resimulate(r["rec"])
+    ids = [b["id"] for b in r["rec"]["bodies"]]
+    k = ids.index(m["char"])
+    coach = r["vs"] == "coach"
+    nm = m["name"].split("·")[0]
+    start = max(0, r["focus"] - int(LEAD * 20))
+    rs = next(t for t in range(r["focus"], -1, -1) if t == 0 or frames[t - 1]["r"] != frames[r["focus"]]["r"])
+    if start < rs <= r["focus"] - 40:                               # 不跨回合剪：从这一回合开头开始，免得两人突然跳回角落
+        start = rs
+    show =["S" if coach and j != k else c for j, c in enumerate(ids)]
+    why = ""
+    if m["event"] == "第一次 TKO 获胜":                              # TKO 没人倒地时，观众得知道裁判为什么叫停
+        last, rnd = frames[-1]["f"][1 - k], frames[-1]["r"]
+        kds = sum(f["f"][1 - k][14] for f in frames if f["r"] == rnd)
+        why = " · 裁判叫停：" + ("一回合倒地三次" if kds >= 3 else "体力打空" if last[3] <= 0 else "受伤后连续挨打不还手")
+    return {"kind": "reenact", "iter": m["iter"], "fights": m["fights"], "frames": frames, "bodies": r["rec"]["bodies"],
+            "ids": show, "labels": [nick[c] for c in show], "names": [nick[c] if c == "S" else body_of(c).label.split("·")[0] for c in show],
+            "from": start, "dur": CLIP, "speed": 1, "capAt": (r["focus"] - start) / 20 + 0.15,
+            "when": f"训练第 {m['iter']} 轮", "when_sub": f"第 {m['fights']} 场左右 · 用{r['src']}重演" + (" · 对陪练教练" if coach else ""),
+            "caption": {"text": f"{nm} {m['event']}", "sub": f"训练第 {m['iter']} 轮 · 版本重演" + ("（对陪练教练）" if coach else "") + why, "big": True},
+            "voice": f"训练第{m['iter']}轮，{nm}{m['event']}{'，对手是陪练教练' if coach else ''}。"}
+
+
+def growth_clips(runs, milestones, coach):
+    """成长片段：出生（存档录像）→ 几件大事的版本重演 → 首战前最后一次存档（存档录像）。"""
+    items = growth_items(runs)
     if not items:
         return [], 0
-    n = len(items)
-    picks = sorted(set([0, min(n - 1, 1), n // 4, n // 2, (3 * n) // 4, n - 1]))
-    clips, prev_iter = [], -1
-    total_fights = 0
-    for pi in picks:
-        _, run, v = items[pi]
-        evals = run["evals"]
-        g = json.load(open(os.path.join(run["dir"], "growth", f"v{v:04d}.json"), encoding="utf-8"))
-        rec = g["replays"][0]
-        frames = BL.resimulate(rec)
-        start = best_window(frames)
-        new = [m for m in milestones if prev_iter < m["iter"] <= g["iter"]]
-        big = [m for m in new if any(x in m["event"] for x in ("击倒", "KO", "TKO"))]
-        ev = next((e for e in evals if e["version"] == v), None)
-        if g["iter"] == 0:
-            cap = {"text": "刚出生：不会控制距离，也不会出拳", "sub": "两具赛博肉体第一次站上擂台"}
-            voice = "刚出生的他们，还不知道拳该往哪里打。"
-        elif new:
-            m = (big or new)[-1]
-            cap = {"text": f"{m['name'].split('·')[0]} {m['event']}{vs(m['iter'])}", "sub": f"{'这段之前 · ' if m['iter'] < g['iter'] else ''}训练第 {m['iter']} 轮 · 第 {m['fights']} 场左右", "big": bool(big)}
-            voice = f"训练第{m['iter']}轮，{m['name'].split('·')[0]}{m['event']}{'，对手是陪练教练' if m['iter'] <= coach else ''}。"
-        else:
-            cap = None
-            voice = f"训练第{g['iter']}轮。"
-        sub = f"已对打 {g['fights']} 场"
-        if ev:
-            ids = [b["id"] for b in rec["bodies"]]
-            rate = [ev.get(f"{i}_vs_S", {}).get("punch_rate", 0) for i in ids]
-            sub += f" · 每 10 秒出拳 {rate[0]:.0f} / {rate[1]:.0f}"
-        clips.append({"version": v, "iter": g["iter"], "fights": g["fights"], "frames": frames, "bodies": rec["bodies"],
-                      "from": start, "dur": 9.0, "speed": 1, "when": f"训练第 {g['iter']} 轮" if g["iter"] else "第 0 轮 · 出生",
-                      "when_sub": sub + ("　· 启蒙期：跟陪练教练学" if 0 < g["iter"] <= coach else ""), "caption": cap, "voice": voice})
-        prev_iter = g["iter"]
-        total_fights = g["fights"]
-    return clips, total_fights
+    cpath = os.path.join(runs[-1]["dir"], "milestone_reenact.json")
+    cache = json.load(open(cpath, encoding="utf-8")) if os.path.exists(cpath) else {}
+    clips = [archive_clip(items[0], {"text": "刚出生：不会控制距离，也不会出拳", "sub": "两具赛博肉体第一次站上擂台"},
+                          "刚出生的他们，还不知道拳该往哪里打。", coach)]
+    nick = {c: CHARS[c]["nick"] for c in CHARS} | {"S": "陪练教练"}
+    for group in pick_milestones(milestones):
+        for m in group:
+            r = reenact(m, runs, items, coach, cache)
+            if r:
+                clips.append(reenact_clip(m, r, nick))
+                break
+    json.dump(cache, open(cpath, "w", encoding="utf-8"), ensure_ascii=False)
+    last = items[-1]
+    clips.append(archive_clip(last, {"text": "首战前的最后一次存档", "sub": f"训练第 {last[0]} 轮"},
+                              f"训练第{last[0]}轮，首战前的最后一次存档。", coach))
+    return clips, clips[-1]["fights"]
 
 
 def main():
@@ -148,7 +260,7 @@ def main():
     for r in runs:
         mp = os.path.join(r["dir"], "milestones.jsonl")
         if os.path.exists(mp):
-            milestones += [json.loads(l) for l in open(mp, encoding="utf-8")]
+            milestones += [{**json.loads(l), "_run": r["name"]} for l in open(mp, encoding="utf-8")]
     coach = runs[0]["cfg"]["args"].get("coach_iters", 0)
     clips, total_fights = growth_clips(runs, milestones, coach)
     card = first_fight(run, skills_of)

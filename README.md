@@ -59,7 +59,7 @@ node tools/export_video.mjs runs/episode_pilot.html runs/试播集.mp4 --items a
 | `viz.js` | 转播画面渲染：拳手骨骼与造型、动作、多机位导播（整场预先排好机位，两人不叠在一起）、擂台、开场卡、回合统计、读秒、慢镜回放、判定、训练场景。观看页和导出视频共用 |
 | `season_template.html` | 赛季观看页（时间线、比赛、训练场、疲劳曲线） |
 | `tools/export_video.mjs` | 把观看页的画面逐帧导出成 mp4，再配上音轨 |
-| `make_episode.py` + `episode_template.html` | 试播集：片头、人物介绍、成长片段（`train.py --record` 的成长档案和里程碑）、首战（只打一次存档，结果不重来）、片尾。人设和立绘读本地 `characters/`，不进仓库 |
+| `make_episode.py` + `episode_template.html` | 试播集：片头、人物介绍、成长片段（出生和首战前用 `train.py --record` 存档节点另打的录像；中间几件大事是里程碑的版本重演：训练里那一场没录像，用当时的出招网络按当时的对手重打到同样的事发生，第一次找到的那场存进 `runs/<run>/milestone_reenact.json`，以后只读存档）、首战（只打一次存档，结果不重来）、片尾。人设和立绘读本地 `characters/`，不进仓库 |
 | `tools/preview_frames.mjs` | 抽几帧截图看画面，不用导整片 |
 | `tools/make_audio.py` | 按声音事件表合成音轨（音效、观众、训练节拍、解说），事件表由 `viz.js` 从同一条时间线算出 |
 
@@ -111,6 +111,7 @@ py -X utf8 analyze.py --runs s1 s2 s3
 - `train_log.jsonl`：每轮训练的胜负、熵、KL
 - `evals.jsonl`：每个版本对标准陪练、对对手的战绩和打法指标，成长曲线就从这里画
 - `matches/*.json`：回放档，只存初始距离和双方逐帧动作。模拟器是确定的，画面随时可以重新算，换机位、加特效都不用重新比赛
+- `milestones.jsonl` + `ckpt/<角色>_ms<轮数>.npz`（拳击版 `--record`）：第一次打中、第一次击倒之类的里程碑，记下对手是谁，并把那一刻两边的出招网络和熟练度另存一份，做节目时用它重演
 
 ## 已知局限
 

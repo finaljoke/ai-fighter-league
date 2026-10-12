@@ -198,21 +198,26 @@ function drawChapter(c, box, t, dur, sg) {
 function drawGrowth(c, box, t, dur, g, i) {
   const [x0, y0, w, h] = box, s = h / 720, rep = g._rep, n = rep.frames.length;
   const tf = Math.min(n - 1, g.from + t * 20 * g.speed);
-  const ids = g.bodies.map(b => b.id);
-  const { t: ti } = VIZ.drawBoutFrame(c, rep, tf, box, { ids, labels: ids.map(NICK), apron: EP.apron });
-  VIZ.hud(c, rep, ti, box, ids.map(NAME), false);
-  // 左上：成长节点（紧贴顶栏下面）
-  const p = t / dur, cy = y0 + VIZ.hudHeight(box) + 10 * s;
-  c.fillStyle = 'rgba(6,8,14,0.82)'; c.beginPath(); c.roundRect(x0 + 18 * s, cy, 330 * s, 96 * s, 10 * s); c.fill();
+  const ids = g.ids || g.bodies.map(b => b.id);                  // 重演里陪练教练那一方用教练的造型
+  const { t: ti } = VIZ.drawBoutFrame(c, rep, tf, box, { ids, labels: g.labels || ids.map(NICK), apron: EP.apron });
+  VIZ.hud(c, rep, ti, box, g.names || ids.map(NAME), false, ids);
+  // 左上：成长节点（紧贴顶栏下面，卡片按副标题的长度加宽）
+  const cy = y0 + VIZ.hudHeight(box) + 10 * s;
+  c.font = `${14 * s}px ${FONT}`;
+  const cw = Math.max(330 * s, c.measureText(g.when_sub).width + 36 * s);
+  c.fillStyle = 'rgba(6,8,14,0.82)'; c.beginPath(); c.roundRect(x0 + 18 * s, cy, cw, 96 * s, 10 * s); c.fill();
   c.fillStyle = '#e8b33c'; c.fillRect(x0 + 18 * s, cy, 6 * s, 96 * s);
   c.textAlign = 'left'; c.font = `700 ${15 * s}px ${FONT}`; c.fillStyle = '#e8b33c';
   c.fillText(`成长记录 ${String(i + 1).padStart(2, '0')} / ${String(EP.growth.length).padStart(2, '0')}`, x0 + 36 * s, cy + 26 * s);
   c.font = `900 ${28 * s}px ${FONT}`; c.fillStyle = '#fff'; c.fillText(g.when, x0 + 36 * s, cy + 62 * s);
   c.font = `${14 * s}px ${FONT}`; c.fillStyle = 'rgba(255,255,255,0.65)'; c.fillText(g.when_sub, x0 + 36 * s, cy + 85 * s);
-  if (g.speed !== 1) { c.fillStyle = '#d03b3b'; c.beginPath(); c.roundRect(x0 + w - 150 * s, cy, 130 * s, 34 * s, 6 * s); c.fill(); c.fillStyle = '#fff'; c.font = `800 ${16 * s}px ${FONT}`; c.textAlign = 'center'; c.fillText(g.speed < 1 ? '慢 镜' : `${g.speed} 倍速`, x0 + w - 85 * s, cy + 23 * s); }
-  // 下方：这一阶段在学什么 / 里程碑
-  const cap = g.caption;
-  if (cap) VIZ.caption(c, box, cap.text, cap.sub || null, cap.big ? '#ff5a4f' : '#ffd24a', clamp(p * 6, 0, 1) * clamp((1 - p) * 8, 0, 1));
+  // 右上：这段画面是什么来历（存档节点另打的录像 / 里程碑的版本重演），下面是速度
+  const tag = (text, col, row) => { c.fillStyle = col; c.beginPath(); c.roundRect(x0 + w - 150 * s, cy + row * 42 * s, 130 * s, 34 * s, 6 * s); c.fill(); c.fillStyle = '#fff'; c.font = `800 ${16 * s}px ${FONT}`; c.textAlign = 'center'; c.fillText(text, x0 + w - 85 * s, cy + row * 42 * s + 23 * s); };
+  if (g.kind) tag(g.kind === 'reenact' ? '版 本 重 演' : '存 档 录 像', g.kind === 'reenact' ? '#d03b3b' : 'rgba(40,46,60,0.9)', 0);
+  if (g.speed !== 1) tag(g.speed < 1 ? '慢 镜' : `${g.speed} 倍速`, '#d03b3b', g.kind ? 1 : 0);
+  // 下方：里程碑字幕等那一下真出现了再出来
+  const cap = g.caption, ca = g.capAt || 0;
+  if (cap && t >= ca) VIZ.caption(c, box, cap.text, cap.sub || null, cap.big ? '#ff5a4f' : '#ffd24a', clamp((t - ca) * 6, 0, 1) * clamp((dur - t) * 8, 0, 1));
 }
 
 // ---------------------------------------------------------------- 片尾
@@ -311,7 +316,7 @@ window.EXPORT = {
         const tOut = (tt - g.from) / (20 * g.speed);
         if (tOut >= from && tOut < to) VIZ.tickEvents(rep, tt, tOut, ev, { gym: true, slow: g.speed < 1 });
       }
-      ev.push(voiceEv(0.3, g.voice));
+      ev.push(voiceEv((g.capAt || 0) + 0.15, g.voice));            // 解说跟着字幕，那一下出现了才说
     } else if (sg.type === 'outro') {
       ev.push({ t: 0, type: 'bed', to: sg.dur, kind: 'music', level: 0.5 });
       ev.push({ t: 0.1, type: 'cheer', level: 0.8 });

@@ -144,6 +144,18 @@ def main():
         if box and args.record:
             record_growth(run_dir, bodies, [p[-1] for p in pool], ver, it + it_off, total_ticks, fights_done[0], skills, args.record)
 
+    snapped = {}
+
+    def milestone_snap(it):
+        """里程碑那一刻两边正在学的出招网络和熟练度。一轮之内网络和熟练度都不变，同一轮只存一次。"""
+        if it not in snapped:
+            files = {}
+            for side, body in enumerate(bodies):
+                fn = f"{body.id}_ms{it:04d}.npz"
+                files[body.id] = {"file": fn, "sha256": save_policy(os.path.join(run_dir, "ckpt", fn), agents[side].snapshot().params)}
+            snapped[it] = {"files": files, "skills": skills.round(4).tolist()}
+        return snapped[it]
+
     def assign(mask):
         idx = np.flatnonzero(mask)
         if not idx.size:
@@ -260,7 +272,7 @@ def main():
                     rec[0] += int(info["winner"][i] == side)
                     rec[1] += 1
             if box and args.record:
-                note_milestones(run_dir, bodies, info, done, ctrl == -1, firsts, it + it_off, total_ticks, fights_done[0])
+                note_milestones(run_dir, bodies, info, done, ctrl, firsts, it + it_off, total_ticks, fights_done[0], milestone_snap)
                 fights_done[0] += int((done & (ctrl == -1).any(1)).sum())
             fin = done & main
             if fin.any():
@@ -389,17 +401,21 @@ MILESTONES = [
 ]
 
 
-def note_milestones(run_dir, bodies, info, done, learn, firsts, it, ticks, fights):
-    """正在学的那一方第一次做到某件事时记一笔（训练里的比赛没录像，录像在每个存档节点另打）。"""
+def note_milestones(run_dir, bodies, info, done, ctrl, firsts, it, ticks, fights, snap):
+    """正在学的那一方第一次做到某件事时记一笔。训练里的比赛没录像，录像在每个存档节点另打；
+    所以同时记下对手是谁（陪练教练 / 对方正在学的版本 / 历史版本），并用 snap() 把当时两边的出招网络另存一份，做节目时拿它重演。"""
     for k in (0, 1):
         for name, test in MILESTONES:
             if name in firsts[k]:
                 continue
-            hit = np.asarray(test(info, k)) & learn[:, k]
+            hit = np.asarray(test(info, k)) & (ctrl[:, k] == -1)
             if hit.any():
                 firsts[k].add(name)
+                opp = int(ctrl[np.flatnonzero(hit)[0], 1 - k])
+                vs = "coach" if opp == -2 else "self" if opp == -1 else f"v{opp:04d}"
                 append(run_dir, "milestones.jsonl", {"char": bodies[k].id, "name": bodies[k].label, "event": name,
-                                                     "iter": it, "ticks": int(ticks), "fights": int(fights)})
+                                                     "iter": it, "ticks": int(ticks), "fights": int(fights),
+                                                     "vs": vs, "snap": snap(it)})
 
 
 def record_growth(run_dir, bodies, pols, ver, it, ticks, fights, skills, n):

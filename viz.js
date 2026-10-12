@@ -578,11 +578,10 @@ const VIZ = (() => {
   // ---------------------------------------------------------------- 转播包装
   function roundRect(c, x, y, w, h, r) { c.beginPath(); c.roundRect(x, y, w, h, r); }
   const hudHeight = box => Math.max(58, box[2] * 0.062);
-  function hud(c, rep, t, box, names, sub) {
+  function hud(c, rep, t, box, names, sub, ids = [rep.bodies[0].id, rep.bodies[1].id]) {      // ids：画哪种造型的配色（重演里陪练教练借用对手的身体）
     const [x0, y0, w] = box, fr = rep.frames[t];
     const H = hudHeight(box);
     c.fillStyle = 'rgba(6,8,14,0.78)'; c.fillRect(x0, y0, w, H);
-    const ids = [rep.bodies[0].id, rep.bodies[1].id];
     for (let k = 0; k < 2; k++) {
       const f = fr.f[k], right = k === 1, bw = w * 0.36, bx = right ? x0 + w - 16 - bw : x0 + 16;
       const L = look(ids[k]);

@@ -35,9 +35,10 @@ class Bout:
 
 
 def run_matches(bodies, ctrls, names, n, seed, n_rounds=B.N_ROUNDS, skills=None, plans=(0, 0),
-                form_sd=B.FORM_SD, plan_rank=None, form_mean=None, tend_prior=None):
+                form_sd=B.FORM_SD, plan_rank=None, form_mean=None, tend_prior=None, on_step=None):
     """skills：(2, N_TECH) 当前熟练度；不给就用天赋。plans：双方开场的战术计划。
-    plan_rank：给了就由角落在回合间调整——这一回合多数裁判判输了，就换成排名里的下一个计划。"""
+    plan_rank：给了就由角落在回合间调整——这一回合多数裁判判输了，就换成排名里的下一个计划。
+    on_step(t, info, alive)：每帧模拟完回调一次（info 是这一帧的原始结果，alive 是还没打完的场次）。"""
     sim = B.Sim(n, bodies, seed=seed, auto_reset=False, n_rounds=n_rounds, skills=skills, form_sd=0.0)
     sim.plan_fixed = None if plans is None else np.array(plans)       # None：每场随机抽战术计划
     if form_sd:
@@ -61,6 +62,8 @@ def run_matches(bodies, ctrls, names, n, seed, n_rounds=B.N_ROUNDS, skills=None,
         a, _ = B.lapse(a, msk, sim, rng)                                  # 拳商：昏招
         rnd_before = sim.round.copy()
         _, done, info = sim.step(a)
+        if on_step is not None:
+            on_step(t, info, alive)
         if plan_rank is not None:
             new_round = sim.round > rnd_before
             if new_round.any():
