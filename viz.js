@@ -23,15 +23,21 @@ const VIZ = (() => {
   };
   const look = id => LOOK[id] || LOOK.S;
   const accent = id => { const L = look(id); return L.accent || L.glove; };
-  // 体型：按身体参数算
+  // 体型：按身体参数算。身高、臂长跟臂展走（出拳够不够得着是按这个画的，不能动）；
+  // 体格比真实差别夸大一些，远景里也一眼分得开：力量大的肩宽、胸厚、胳膊粗，抗击打好的脖子粗、下巴宽，步速快的腿细
   function build(body) {
     const reach = body ? body.reach : 0.75, mass = body ? body.mass : 72;
+    const power = body ? body.power : 1, chin = body ? body.chin : 1, foot = body ? body.foot_speed : 1;
     const H = 1.72 + (reach - 0.75) * 0.75;
+    const mus = clamp(1 + 1.6 * (power - 1) + 0.01 * (mass - 72), 0.65, 1.45);
+    const leg = clamp(1 + 0.6 * (power - 1) + 0.012 * (mass - 72) - 0.9 * (foot - 1), 0.75, 1.3);
     return {
       H, hipH: 0.5 * H, shH: 0.81 * H, headR: 0.064 * H, neck: 0.03 * H,
       ua: 0.165 * H * (0.85 + 0.6 * (reach - 0.75)), fa: 0.15 * H * (0.85 + 0.6 * (reach - 0.75)),
-      thigh: 0.25 * H, shin: 0.25 * H, chest: 0.14 + (mass - 70) * 0.004, waist: 0.12 + (mass - 70) * 0.0035,
-      limb: 0.055 + (mass - 70) * 0.0012, glove: 0.072 + (mass - 70) * 0.0005,
+      thigh: 0.25 * H, shin: 0.25 * H, mus,
+      chest: 0.15 * (0.25 + 0.75 * mus) + 0.003 * (mass - 72), waist: 0.125 + 0.003 * (mass - 72),
+      arm: 0.085 * mus, legW: 0.13 * leg, neckW: 0.1 * clamp(1 + 1.5 * (chin - 1), 0.7, 1.4), jaw: clamp(1 + 0.4 * (chin - 1), 0.9, 1.12),
+      glove: 0.072 + (mass - 70) * 0.0005,
     };
   }
 
@@ -52,6 +58,20 @@ const VIZ = (() => {
     c.strokeStyle = ink; c.lineWidth = w + lw * 2; c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.stroke();
     c.strokeStyle = fill; c.lineWidth = w; c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.stroke();
   }
+  // 有粗细变化的肢体（肌肉往关节收细）：pts 是沿肢体的点，ws 是每个点处的粗细（像素）。先整个描一圈墨线，再填色
+  function limb(c, pts, ws, fill, ink, lw) {
+    const pass = grow => {
+      for (let i = 0; i < pts.length - 1; i++) {
+        const [ax, ay] = pts[i], [bx, by] = pts[i + 1], L = Math.hypot(bx - ax, by - ay) || 1;
+        const nx = -(by - ay) / L, ny = (bx - ax) / L, wa = ws[i] / 2 + grow, wb = ws[i + 1] / 2 + grow;
+        c.beginPath(); c.moveTo(ax + nx * wa, ay + ny * wa); c.lineTo(bx + nx * wb, by + ny * wb); c.lineTo(bx - nx * wb, by - ny * wb); c.lineTo(ax - nx * wa, ay - ny * wa); c.fill();
+      }
+      pts.forEach((p, i) => { c.beginPath(); c.arc(p[0], p[1], ws[i] / 2 + grow, 0, Math.PI * 2); c.fill(); });
+    };
+    c.fillStyle = ink; pass(lw);
+    c.fillStyle = fill; pass(0);
+  }
+  const along = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t)];
 
   // ---------------------------------------------------------------- 画一个拳手
   // 姿势用"身体局部坐标"：x 朝对手为正（米），y 从地面往上（米）。屏幕上 sx = 脚下中心 + dir * x * s。
@@ -74,19 +94,24 @@ const VIZ = (() => {
     // 近侧和远侧：正架面朝右时，后手在镜头这边；面朝左时，前手在镜头这边
     const nearIsRear = (dir * stance) > 0;
     const feet = pose.feet || [0.24, -0.2, 0, 0];
+    const P = p => [X(p[0]), Y(p[1])];
     const leg = (fx, lift, far) => {
-      const k = ik(hip[0] + (far ? -0.03 : 0.03), hipH, fx, 0.06 + lift, B.thigh, B.shin, 1);      // 膝盖往前弯
+      const top = [hip[0] + (far ? -0.03 : 0.03), hipH], ft = [fx, 0.06 + lift];
+      const k = ik(top[0], top[1], ft[0], ft[1], B.thigh, B.shin, 1);      // 膝盖往前弯
+      const knee = [k.jx, k.jy], w = B.legW * s;
       const col = far ? shade(L.skin, -0.18) : L.skin;
-      tube(c, [[X(hip[0] + (far ? -0.03 : 0.03)), Y(hipH)], [X(k.jx), Y(k.jy)], [X(fx), Y(0.06 + lift)]], B.limb * 1.15 * s, col, ink, lw);
+      // 大腿 → 膝盖收细 → 小腿肚 → 脚踝
+      limb(c, [top, along(top, knee, 0.4), knee, along(knee, ft, 0.3), ft].map(P), [w, w * 0.95, w * 0.62, w * 0.7, w * 0.42], col, ink, lw);
       // 袜子和鞋
-      tube(c, [[X(k.jx + (fx - k.jx) * 0.72), Y(k.jy + (0.06 + lift - k.jy) * 0.72)], [X(fx), Y(0.07 + lift)]], B.limb * 1.2 * s, far ? shade(L.sock, -0.2) : L.sock, ink, lw);
+      limb(c, [along(knee, ft, 0.72), ft].map(P), [w * 0.58, w * 0.5], far ? shade(L.sock, -0.2) : L.sock, ink, lw);
       c.fillStyle = far ? shade(L.shoe, -0.25) : L.shoe; c.strokeStyle = ink; c.lineWidth = lw;
       c.beginPath(); c.ellipse(X(fx + 0.04), Y(0.035 + lift), 0.11 * s, 0.045 * s, 0, 0, Math.PI * 2); c.fill(); c.stroke();
     };
     const arm = (sh, g, big, bodyShot, far, glove) => {
       const k = ik(sh[0], sh[1], g[0], g[1], B.ua, B.fa, -1);                                     // 手肘往下
-      const col = far ? shade(L.skin, -0.18) : L.skin;
-      tube(c, [[X(sh[0]), Y(sh[1])], [X(k.jx), Y(k.jy)], [X(g[0]), Y(g[1])]], B.limb * s, col, ink, lw);
+      const col = far ? shade(L.skin, -0.18) : L.skin, el = [k.jx, k.jy], w = B.arm * s;
+      // 三角肌 → 二头肌 → 手肘收细 → 前臂 → 手腕（被拳套盖住）
+      limb(c, [sh, along(sh, el, 0.4), el, along(el, g, 0.35), g].map(P), [w * 1.15, w, w * 0.68, w * 0.74, w * 0.52], col, ink, lw);
       const r = (big ? 1.15 : 1) * B.glove * s;
       c.fillStyle = far ? shade(glove, -0.22) : glove; c.strokeStyle = ink; c.lineWidth = lw;
       c.beginPath(); c.ellipse(X(g[0]), Y(g[1]), r * 1.1, r, 0, 0, Math.PI * 2); c.fill(); c.stroke();
@@ -106,23 +131,28 @@ const VIZ = (() => {
     c.moveTo(X(hip[0] + B.waist), Y(hipH + 0.05)); c.quadraticCurveTo(X(shC[0] + tw * 1.35), Y(shC[1] - 0.12), X(shC[0] + tw * 0.8), Y(shC[1] + 0.03));
     c.lineTo(X(shC[0] - tw * 0.9), Y(shC[1] + 0.03)); c.quadraticCurveTo(X(shC[0] - tw * 1.2), Y(shC[1] - 0.2), X(hip[0] - B.waist), Y(hipH + 0.05));
     c.closePath(); c.fill(); c.stroke();
-    // 腹肌线
-    c.strokeStyle = 'rgba(0,0,0,0.12)'; c.beginPath(); c.moveTo(X(shC[0] + tw * 0.55), Y(shC[1] - 0.15)); c.quadraticCurveTo(X(hip[0] + B.waist * 1.1), Y((hipH + shC[1]) / 2), X(hip[0] + B.waist * 0.8), Y(hipH + 0.08)); c.stroke();
-    // 短裤
+    // 胸肌、腹肌线：越壮越明显
+    c.strokeStyle = `rgba(0,0,0,${0.06 + 0.08 * B.mus})`; c.lineWidth = lw;
+    c.beginPath(); c.moveTo(X(shC[0] + tw * 1.0), Y(shC[1] - 0.05)); c.quadraticCurveTo(X(shC[0] + tw * 0.95), Y(shC[1] - 0.17), X(shC[0] + tw * 0.15), Y(shC[1] - 0.15)); c.stroke();
+    c.strokeStyle = 'rgba(0,0,0,0.12)'; c.beginPath(); c.moveTo(X(shC[0] + tw * 0.55), Y(shC[1] - 0.17)); c.quadraticCurveTo(X(hip[0] + B.waist * 1.1), Y((hipH + shC[1]) / 2), X(hip[0] + B.waist * 0.8), Y(hipH + 0.08)); c.stroke();
+    // 近侧的腿：画在短裤前面，大腿根被短裤盖住
+    leg(nearIsRear ? feet[1] : feet[0], nearIsRear ? feet[3] : feet[2], false);
+    // 短裤（腿粗的短裤也宽一点）
+    const sw = Math.max(B.waist, B.legW * 0.95);
     c.fillStyle = L.trunk; c.strokeStyle = ink;
-    c.beginPath(); c.moveTo(X(hip[0] - B.waist * 1.15), Y(hipH + 0.08)); c.lineTo(X(hip[0] + B.waist * 1.15), Y(hipH + 0.08));
-    c.lineTo(X(hip[0] + B.waist * 1.3), Y(hipH - 0.2)); c.lineTo(X(hip[0] - B.waist * 1.3), Y(hipH - 0.2)); c.closePath(); c.fill(); c.stroke();
-    c.fillStyle = L.stripe ? shade(L.trunk, -0.35) : L.trunk2; c.fillRect(Math.min(X(hip[0] - B.waist * 1.15), X(hip[0] + B.waist * 1.15)), Y(hipH + 0.08), Math.abs(X(hip[0] + B.waist * 1.15) - X(hip[0] - B.waist * 1.15)), 0.035 * s);
+    c.beginPath(); c.moveTo(X(hip[0] - sw * 1.15), Y(hipH + 0.08)); c.lineTo(X(hip[0] + sw * 1.15), Y(hipH + 0.08));
+    c.lineTo(X(hip[0] + sw * 1.3), Y(hipH - 0.2)); c.lineTo(X(hip[0] - sw * 1.3), Y(hipH - 0.2)); c.closePath(); c.fill(); c.stroke();
+    c.fillStyle = L.stripe ? shade(L.trunk, -0.35) : L.trunk2; c.fillRect(Math.min(X(hip[0] - sw * 1.15), X(hip[0] + sw * 1.15)), Y(hipH + 0.08), Math.abs(X(hip[0] + sw * 1.15) - X(hip[0] - sw * 1.15)), 0.035 * s);
     if (L.stripe) {                 // 短裤外侧的竖条（立绘里的紫条 / 黑金条）
       c.fillStyle = L.trunk2; c.beginPath();
-      c.moveTo(X(hip[0] + B.waist * 0.78), Y(hipH + 0.045)); c.lineTo(X(hip[0] + B.waist * 1.02), Y(hipH + 0.045));
-      c.lineTo(X(hip[0] + B.waist * 1.18), Y(hipH - 0.2)); c.lineTo(X(hip[0] + B.waist * 0.9), Y(hipH - 0.2)); c.closePath(); c.fill();
-      if (L.trim) { c.strokeStyle = L.trim; c.lineWidth = lw * 0.8; c.beginPath(); c.moveTo(X(hip[0] + B.waist * 0.78), Y(hipH + 0.045)); c.lineTo(X(hip[0] + B.waist * 0.9), Y(hipH - 0.2)); c.stroke(); c.strokeStyle = ink; }
+      c.moveTo(X(hip[0] + sw * 0.78), Y(hipH + 0.045)); c.lineTo(X(hip[0] + sw * 1.02), Y(hipH + 0.045));
+      c.lineTo(X(hip[0] + sw * 1.18), Y(hipH - 0.2)); c.lineTo(X(hip[0] + sw * 0.9), Y(hipH - 0.2)); c.closePath(); c.fill();
+      if (L.trim) { c.strokeStyle = L.trim; c.lineWidth = lw * 0.8; c.beginPath(); c.moveTo(X(hip[0] + sw * 0.78), Y(hipH + 0.045)); c.lineTo(X(hip[0] + sw * 0.9), Y(hipH - 0.2)); c.stroke(); c.strokeStyle = ink; }
     }
-    // 近侧的腿
-    leg(nearIsRear ? feet[1] : feet[0], nearIsRear ? feet[3] : feet[2], false);
+    // 脖子：抗击打越好越粗
+    limb(c, [[shC[0] + 0.01, shC[1] - 0.03], [headC[0] - 0.015, headC[1] - B.headR * 0.55]].map(P), [B.neckW * 1.2 * s, B.neckW * s], shade(L.skin, -0.06), ink, lw);
     // 头
-    drawHead(c, X(headC[0]), Y(headC[1]), B.headR * s, dir, L, pose.face || {}, lw, pose.flash);
+    drawHead(c, X(headC[0]), Y(headC[1]), B.headR * s, dir, L, { ...(pose.face || {}), jaw: B.jaw }, lw, pose.flash);
     // 近侧的手最后画
     if (nearIsRear) arm(shRear, rear, pose.rearBig, pose.rearBody, false, L.glove); else arm(shLead, lead, pose.leadBig, pose.leadBody, false, L.glove);
     if (pose.label) {
@@ -138,7 +168,7 @@ const VIZ = (() => {
     const ink = '#14161c';
     c.fillStyle = flash ? '#ffffff' : (face.tilt ? mixHex(L.skin, '#e0503a', 0.45) : L.skin);
     c.strokeStyle = ink; c.lineWidth = lw;
-    c.beginPath(); c.ellipse(hx, hy, r * 0.95, r, 0, 0, Math.PI * 2); c.fill(); c.stroke();
+    c.beginPath(); c.ellipse(hx, hy, r * 0.95 * (face.jaw || 1), r, 0, 0, Math.PI * 2); c.fill(); c.stroke();
     // 头发
     c.fillStyle = L.hairCol;
     if (L.hair === 'spiky') {
@@ -199,10 +229,10 @@ const VIZ = (() => {
     const X = x => sx + dir * x * s, Y = y => sy - y * s;
     const shx = hipX - Math.sin(ang) * (B.shH - B.hipH), shy = hipY + Math.cos(ang) * (B.shH - B.hipH);
     const hx = hipX - Math.sin(ang) * len, hy = hipY + Math.cos(ang) * len;
-    tube(c, [[X(hipX), Y(hipY)], [X(0.25 - 0.2 * d), Y(lerp(0.3, 0.18, d))], [X(0.45 - 0.05 * d), Y(0.06)]], B.limb * 1.15 * s, L.skin, ink, lw);
+    tube(c, [[X(hipX), Y(hipY)], [X(0.25 - 0.2 * d), Y(lerp(0.3, 0.18, d))], [X(0.45 - 0.05 * d), Y(0.06)]], B.legW * 0.85 * s, L.skin, ink, lw);
     tube(c, [[X(hipX), Y(hipY)], [X(shx), Y(shy)]], B.chest * 1.6 * s, L.skin, ink, lw);
     c.fillStyle = L.trunk; c.beginPath(); c.ellipse(X(hipX), Y(hipY), B.waist * 1.3 * s, 0.1 * s, -dir * ang, 0, Math.PI * 2); c.fill();
-    tube(c, [[X(shx), Y(shy)], [X(shx + 0.25), Y(shy + 0.15 - 0.2 * d)]], B.limb * s, L.skin, ink, lw);
+    tube(c, [[X(shx), Y(shy)], [X(shx + 0.25), Y(shy + 0.15 - 0.2 * d)]], B.arm * 0.85 * s, L.skin, ink, lw);
     c.fillStyle = L.glove; c.beginPath(); c.arc(X(shx + 0.25), Y(shy + 0.15 - 0.2 * d), B.glove * s, 0, Math.PI * 2); c.fill(); c.stroke();
     drawHead(c, X(hx), Y(hy), B.headR * s, dir, L, { hurt: true }, lw);
     return { hx: X(hx), hy: Y(hy), hr: B.headR * s };
