@@ -112,10 +112,7 @@ def main():
         "final": {f.id: {"pts": f.pts, "pts0": f.pts0, "skills": f.skills.round(4).tolist(), "record": f.record} for f in fighters},
         "timeline": timeline, "fights": fights, "clips": clips,
         "tech_names": B.TECH_NAMES, "activities": {k: {kk: vv for kk, vv in v.items()} for k, v in C.ACTIVITIES.items()},
-        "sim": {"RING": B.RING, "BODY_R": B.BODY_R, "SHOULDER": B.SHOULDER, "DT": B.DT, "ROUND_TICKS": B.ROUND_TICKS,
-                "RNG": B.RNG.tolist(), "TYPE": B.TYPE.tolist(), "TGT": B.TGT.tolist(), "HAND": B.HAND.tolist(),
-                "actions": B.ACTION_NAMES, "phases": B.PHASE_NAMES, "methods": B.METHOD_NAMES,
-                "postures": B.POSTURE_NAMES, "plans": B.PLAN_NAMES, "version": B.SIM_VERSION},
+        "sim": B.viz_sim(),
     }
     with open(os.path.join(out_dir, "season.json"), "w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o))

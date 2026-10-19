@@ -297,16 +297,20 @@ def frames_of(rec, cache_dir):
             os.makedirs(cache_dir, exist_ok=True)
             json.dump(frames, open(path, "w", encoding="utf-8"), separators=(",", ":"))
         return frames
+    viz = path[:-5] + ".viz.json"           # tools/enrich_frames.py 用当时那一版规则补上画面字段的帧（原来的帧不动）
+    if os.path.exists(viz):
+        return json.load(open(viz, encoding="utf-8"))
     if os.path.exists(path):
         return json.load(open(path, encoding="utf-8"))
     raise SystemExit(f"这场回放是 {rec.get('sim_version')} 规则下打的，现在是 {B.SIM_VERSION}，也没有存好的画面（{path}），没法重算")
 
 
-def resimulate(rec):
-    """按回放档重新模拟，返回逐帧画面数据，并核对结果和存档一致。"""
+def resimulate(rec, mod=None):
+    """按回放档重新模拟，返回逐帧画面数据，并核对结果和存档一致。mod：用哪一版 boxing（补旧回放的画面字段时传当时那一版）。"""
     from bodies import Body
+    M = mod or B
     bodies = tuple(Body(**b) for b in rec["bodies"])
-    sim = B.Sim(1, bodies, auto_reset=False, n_rounds=rec["n_rounds"], skills=rec.get("skills"))
+    sim = M.Sim(1, bodies, auto_reset=False, n_rounds=rec["n_rounds"], skills=rec.get("skills"))
     sim.reset(np.ones(1, bool), init=np.array([rec["init"]]))
     a0 = list(map(int, rec["actions"][0].split(",")))
     a1 = list(map(int, rec["actions"][1].split(",")))
@@ -320,6 +324,9 @@ def resimulate(rec):
                 cur = [p0, p1]
         return cur
 
+    zero = np.zeros((1, 2), np.int64)
+    iv = lambda info, key, k, d: int(info[key][0, k]) if info and key in info else d
+
     def frame(info=None, acts=(0, 0), t=0):
         rows = []
         for k in (0, 1):
@@ -332,7 +339,12 @@ def resimulate(rec):
                 round(float(info["dmg"][0, k]), 1) if info else 0.0, int(acts[k]),
                 int(info["kd"][0, k]) if info else 0, int(info["evaded_by"][0, k]) if info else -1,
                 int(info["counter"][0, k]) if info else 0, int(info["faked"][0, k]) if info else 0,
-                int(sim.posture[0, k]), int(sim.stance[0, k]), int(sim.tilt[0, k] > 0), int(plan_at(t)[k])])
+                int(sim.posture[0, k]), int(sim.stance[0, k]), int(sim.tilt[0, k] > 0), int(plan_at(t)[k]),
+                # 画面用（box2d-v15 起才有，旧回放存好的帧没有这几项）：落点、擦到、被什么挡住、
+                # 肝区击倒前弯着腰、心窝喘不上气、这一拳的身体预备帧数和起手总帧数（旧规则没有的项按没有算）
+                iv(info, "zone", k, -1), iv(info, "glance", k, 0), iv(info, "block_kind", k, 0),
+                int(getattr(sim, "liver_t", zero)[0, k] > 0), int(getattr(sim, "winded_t", zero)[0, k] > 0),
+                int(getattr(sim, "prep_cur", zero)[0, k]), int(getattr(sim, "su_cur", zero)[0, k])])
         return {"f": rows, "r": int(sim.round[0]), "t": int(sim.t_round[0])}
 
     frames = [frame()]

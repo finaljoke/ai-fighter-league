@@ -360,6 +360,16 @@ def skill_vector(skills):
     return v
 
 
+def viz_sim():
+    """观看页（viz.js）用的规则常数：射程按这些算，画面里够不够得着和模拟一致。"""
+    return {"RING": RING, "BODY_R": BODY_R, "SHOULDER": SHOULDER, "DT": DT, "ROUND_TICKS": ROUND_TICKS,
+            "RNG": RNG.tolist(), "TYPE": TYPE.tolist(), "TGT": TGT.tolist(), "HAND": HAND.tolist(),
+            "REACH_W": REACH_W.tolist(), "POSTURE_RANGE": POSTURE_FX[:, FX_RANGE].tolist(), "OPEN_CROSS_RANGE": OPEN_CROSS_RANGE,
+            "ANG_STRAIGHT": float(ANG_STRAIGHT), "ANG_HOOK": float(ANG_HOOK), "KB": KB.tolist(), "TWIST": TWIST.tolist(),
+            "actions": ACTION_NAMES, "phases": PHASE_NAMES, "methods": METHOD_NAMES,
+            "postures": POSTURE_NAMES, "plans": PLAN_NAMES, "version": SIM_VERSION}
+
+
 def lapse(actions, mask, sim, rng):
     """拳商：每帧有一定概率出昏招（换成一个随机的可选动作），心态差时翻倍。
     放在选动作之后、进模拟器之前，所以记录下来的就是实际执行的动作，回放不受影响。"""
@@ -1080,6 +1090,8 @@ class Sim:
                 "evaded_by": np.where(evaded, def_code, -1)[:, ::-1], "counter": counter, "dmg": hp_loss,
                 "points": pts, "kd": kd, "faked": faked, "clinch": cl_ok, "pivot": do_piv,
                 "blocked_by": np.where(blocked, gtype, 0)[:, ::-1], "def_start": np.where(do_def, dcode, -1), "winner": winner, "method": method, "done": done,
+                # 只用于画面：这一拳是射程边缘擦到的；被挡在哪（1 高位格挡 2 护体 3 默认护架）
+                "glance": landed & glance, "block_kind": np.where(blocked, np.where(nat_block, 3, gtype), 0),
                 "ko": done & ((method == M_KO) | (method == M_TKO)), "gap": dist3, "round": rnd,
                 "judges": judge.copy(), "tko_cause": tko_cause,
                 # 只用于统计，口径对齐 CompuBox：打在拳套、手臂、手肘上的不算命中（举架和默认护架挡住的都算被挡），射程边缘擦到的不算

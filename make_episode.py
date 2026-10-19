@@ -295,10 +295,7 @@ def main():
             ["流派", *[chars[c]["school"] for c in ORDER]], ["属性总分", *[chars[c]["budget"] for c in ORDER]],
             ["招牌技", *[chars[c]["signature"] for c in ORDER]], ["赛前战术", *card.get("plans", ["", ""])]]
     data = {
-        "sim": {"RING": B.RING, "BODY_R": B.BODY_R, "SHOULDER": B.SHOULDER, "DT": B.DT, "ROUND_TICKS": B.ROUND_TICKS,
-                "RNG": B.RNG.tolist(), "TYPE": B.TYPE.tolist(), "TGT": B.TGT.tolist(), "HAND": B.HAND.tolist(),
-                "actions": B.ACTION_NAMES, "phases": B.PHASE_NAMES, "methods": B.METHOD_NAMES,
-                "postures": B.POSTURE_NAMES, "plans": B.PLAN_NAMES, "version": B.SIM_VERSION},
+        "sim": B.viz_sim(),
         "order": ORDER, "chars": chars, "portraits": {c: portrait_uri(c) for c in ORDER}, "apron": "第 1 季 · 试播集",
         "growth": clips, "growth_sub": f"两具赛博肉体从不会出拳开始，自己和自己打了 {total_fights} 场",
         "fight": {k: v for k, v in card.items() if k != "replay"},
