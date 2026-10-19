@@ -2,10 +2,13 @@
 // 输入只有回放档重算出来的逐帧数据（只存动作的回放 → 重新模拟），画面全部由代码画出。
 'use strict';
 const VIZ = (() => {
-  const F = { x: 0, y: 1, th: 2, hp: 3, stun: 4, stam: 5, comp: 6, ph: 7, mv: 8, g: 9, fired: 10, oc: 11, dmg: 12, act: 13, kd: 14, ev: 15, ctr: 16, fk: 17, post: 18, st: 19, tilt: 20, plan: 21 };
+  // 22 起是画面专用的几项（box2d-v15 起才有）：落点、擦到、被什么挡住、肝区击倒前弯腰、心窝喘不上气、身体预备帧数、起手总帧数
+  const F = { x: 0, y: 1, th: 2, hp: 3, stun: 4, stam: 5, comp: 6, ph: 7, mv: 8, g: 9, fired: 10, oc: 11, dmg: 12, act: 13, kd: 14, ev: 15, ctr: 16, fk: 17, post: 18, st: 19, tilt: 20, plan: 21,
+    zone: 22, gl: 23, blk: 24, liv: 25, wind: 26, prep: 27, su: 28 };
   const PH = { FREE: 0, STARTUP: 1, RECOVERY: 2, HITSTUN: 3, BLOCKSTUN: 4, DEFEND: 5, CLINCH: 6, DOWN: 7, MOVING: 8 };
-  const M = { PARRY: 13, SLIP: 14, DUCK: 15, PULL: 16 };
-  let SIM = null;                       // 由页面设置：{RING, DT, TYPE, TGT, HAND, ROUND_TICKS, actions, plans, postures, methods}
+  const M = { CLINCH: 12, PARRY: 13, SLIP: 14, DUCK: 15, PULL: 16, PIVL: 17, PIVR: 18, POSTURE: 20, STANCE: 21 };
+  const ACT = { GUARD_FWD: 20, FEINT_JAB: 27, FEINT_CROSS: 28 };
+  let SIM = null;                       // 由页面设置：boxing.viz_sim() 给的规则常数（RING、DT、TYPE、TGT、HAND、RNG、射程系数、击退……）
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a, b, t) => a + (b - a) * t;
   const ease = t => t < 0 ? 0 : t > 1 ? 1 : t * t * (3 - 2 * t);
@@ -164,12 +167,54 @@ const VIZ = (() => {
     return { hx: X(headC[0]), hy: Y(headC[1]), hr: B.headR * s };
   }
 
-  function drawHead(c, hx, hy, r, dir, L, face, lw, flash) {
-    const ink = '#14161c';
+  // 头。psi 是脸朝向在画面里的角度：0 朝右、π 朝左、−π/2 正对镜头、π/2 背对镜头。五官按在头上的方位角投影，转到背面的不画
+  function drawHead(c, hx, hy, r, dir, L, face, lw, flash) { drawHead3(c, hx, hy, r, dir > 0 ? 0 : Math.PI, L, face, lw, flash); }
+  function drawHead3(c, hx, hy, r, psi, L, face, lw, flash) {
+    const ink = '#14161c', cs = Math.cos(psi), sn = Math.sin(psi), dir = cs >= 0 ? 1 : -1;
+    const vis = az => Math.sin(psi + az) < 0.2, ax = (az, k) => hx + Math.cos(psi + az) * r * k;
     c.fillStyle = flash ? '#ffffff' : (face.tilt ? mixHex(L.skin, '#e0503a', 0.45) : L.skin);
     c.strokeStyle = ink; c.lineWidth = lw;
     c.beginPath(); c.ellipse(hx, hy, r * 0.95 * (face.jaw || 1), r, 0, 0, Math.PI * 2); c.fill(); c.stroke();
-    // 头发
+    // 头发：侧面按发型画，正面、背面画成发顶
+    if (sn > 0.9) hairFront(c, hx, hy, r, L, true);
+    else if (Math.abs(cs) > 0.3) hairProfile(c, hx, hy, r, dir, L);
+    else hairFront(c, hx, hy, r, L, false);
+    // 耳朵
+    c.fillStyle = shade(L.skin, -0.1);
+    for (const az of [Math.PI / 2, -Math.PI / 2]) if (vis(az)) { c.beginPath(); c.ellipse(ax(az, 0.82) - cs * r * 0.15, hy + r * 0.05, r * 0.18, r * 0.26, 0, 0, Math.PI * 2); c.fill(); }
+    if (sn > 0.9) return;
+    // 眼睛、眉毛（眉尾朝鼻子那头按眉形压低或抬高）
+    const br = (L.brow || 0) + (face.tilt ? -0.35 : 0) + (face.hurt ? 0.3 : 0), nose = ax(0, 0.95), ey = hy - r * 0.05;
+    for (const az of [0.42, -0.42]) {
+      if (!vis(az)) continue;
+      const ex = ax(az, 0.6), sq = clamp(-Math.sin(psi + az) * 1.3, 0.45, 1), inn = Math.sign(nose - ex) || dir;
+      if (face.hurt) {
+        c.strokeStyle = ink; c.lineWidth = lw * 1.2; c.beginPath(); c.moveTo(ex - r * 0.15 * sq, ey - r * 0.1); c.lineTo(ex + r * 0.15 * sq, ey + r * 0.1); c.moveTo(ex - r * 0.15 * sq, ey + r * 0.1); c.lineTo(ex + r * 0.15 * sq, ey - r * 0.1); c.stroke();
+      } else {
+        c.fillStyle = '#ffffff'; c.beginPath(); c.ellipse(ex, ey, r * 0.16 * sq, r * 0.13, 0, 0, Math.PI * 2); c.fill();
+        c.fillStyle = ink; c.beginPath(); c.arc(ex + cs * r * 0.06, ey, r * 0.075, 0, Math.PI * 2); c.fill();
+      }
+      c.strokeStyle = ink; c.lineWidth = lw * 1.6;
+      c.beginPath(); c.moveTo(ex - inn * r * 0.2 * sq, ey - r * 0.25 - br * r * 0.15); c.lineTo(ex + inn * r * 0.22 * sq, ey - r * 0.25 + br * r * 0.15); c.stroke();
+    }
+    if (L.scar) {                   // 脸上的旧伤疤，在朝镜头的那边脸颊上
+      const az = Math.sin(psi - 0.75) < Math.sin(psi + 0.75) ? -0.75 : 0.75;
+      if (vis(az)) {
+        const sx = ax(az, 0.64);
+        c.strokeStyle = '#a3262b'; c.lineWidth = lw * 1.1; c.beginPath(); c.moveTo(sx - dir * r * 0.15, hy + r * 0.05); c.lineTo(sx + dir * r * 0.15, hy + r * 0.38); c.stroke();
+        c.lineWidth = lw * 0.7; c.beginPath(); c.moveTo(sx - dir * r * 0.07, hy + r * 0.24); c.lineTo(sx + dir * r * 0.05, hy + r * 0.15); c.stroke();
+      }
+    }
+    if (sn > 0.45) return;
+    const mx = ax(0, 0.67), wide = 1 + 0.6 * clamp(-sn, 0, 1);
+    if (L.smirk && !face.hurt) {    // 带着笑意打量对手
+      c.strokeStyle = ink; c.lineWidth = lw; c.beginPath();
+      c.moveTo(mx - dir * r * 0.17 * wide, hy + r * 0.5); c.quadraticCurveTo(mx - dir * r * 0.01, hy + r * 0.58, mx + dir * r * 0.17 * wide, hy + r * 0.4); c.stroke();
+    }
+    c.fillStyle = L.trunk2; c.beginPath(); c.ellipse(ax(0, 0.72), hy + r * 0.45, r * 0.2 * wide, r * 0.1, 0, 0, Math.PI * 2); c.fill();     // 护齿
+    if (face.sweat) { c.fillStyle = 'rgba(160,210,255,0.85)'; c.beginPath(); c.ellipse(hx - cs * r * 0.6, hy - r * 0.9, r * 0.1, r * 0.16, 0, 0, Math.PI * 2); c.fill(); }
+  }
+  function hairProfile(c, hx, hy, r, dir, L) {
     c.fillStyle = L.hairCol;
     if (L.hair === 'spiky') {
       c.beginPath(); c.moveTo(hx - dir * r * 0.95, hy - r * 0.1);
@@ -193,31 +238,16 @@ const VIZ = (() => {
       c.beginPath(); c.ellipse(hx, hy - r * 0.45, r * 1.0, r * 0.55, 0, Math.PI, 0); c.fill();
       c.fillRect(hx, hy - r * 0.5, dir * r * 1.35, r * 0.18);
     }
-    // 耳朵
-    c.fillStyle = shade(L.skin, -0.1); c.beginPath(); c.ellipse(hx - dir * r * 0.15, hy + r * 0.05, r * 0.18, r * 0.26, 0, 0, Math.PI * 2); c.fill();
-    // 眼睛、眉毛
-    const ex = hx + dir * r * 0.55, ey = hy - r * 0.05;
-    if (face.hurt) {
-      c.strokeStyle = ink; c.lineWidth = lw * 1.2; c.beginPath(); c.moveTo(ex - r * 0.15, ey - r * 0.1); c.lineTo(ex + r * 0.15, ey + r * 0.1); c.moveTo(ex - r * 0.15, ey + r * 0.1); c.lineTo(ex + r * 0.15, ey - r * 0.1); c.stroke();
-    } else {
-      c.fillStyle = '#ffffff'; c.beginPath(); c.ellipse(ex, ey, r * 0.16, r * 0.13, 0, 0, Math.PI * 2); c.fill();
-      c.fillStyle = ink; c.beginPath(); c.arc(ex + dir * r * 0.06, ey, r * 0.075, 0, Math.PI * 2); c.fill();
+  }
+  function hairFront(c, hx, hy, r, L, back) {
+    c.fillStyle = L.hairCol;
+    if (back) { c.beginPath(); c.ellipse(hx, hy - r * 0.12, r * 0.93, r * 0.86, 0, 0, Math.PI * 2); c.fill(); return; }
+    c.beginPath(); c.ellipse(hx, hy - r * 0.42, r * 0.98, r * 0.62, 0, Math.PI, 0); c.fill();
+    if (L.hair === 'shaggy' || L.hair === 'spiky') {   // 刘海
+      c.beginPath(); c.moveTo(hx - r * 0.9, hy - r * 0.42);
+      for (let i = 0; i <= 6; i++) c.lineTo(hx - r * 0.9 + i * r * 0.3, hy - r * (i % 2 ? 0.18 : 0.42));
+      c.closePath(); c.fill();
     }
-    const br = (L.brow || 0) + (face.tilt ? -0.35 : 0) + (face.hurt ? 0.3 : 0);
-    c.strokeStyle = ink; c.lineWidth = lw * 1.6;
-    c.beginPath(); c.moveTo(ex - dir * r * 0.2, ey - r * 0.25 - br * r * 0.15); c.lineTo(ex + dir * r * 0.22, ey - r * 0.25 + br * r * 0.15); c.stroke();
-    if (L.scar) {                   // 脸上的旧伤疤
-      c.strokeStyle = '#a3262b'; c.lineWidth = lw * 1.1; c.beginPath();
-      c.moveTo(hx + dir * r * 0.32, hy + r * 0.05); c.lineTo(hx + dir * r * 0.62, hy + r * 0.38); c.stroke();
-      c.lineWidth = lw * 0.7; c.beginPath(); c.moveTo(hx + dir * r * 0.4, hy + r * 0.24); c.lineTo(hx + dir * r * 0.52, hy + r * 0.15); c.stroke();
-    }
-    if (L.smirk && !face.hurt) {    // 带着笑意打量对手
-      c.strokeStyle = ink; c.lineWidth = lw; c.beginPath();
-      c.moveTo(hx + dir * r * 0.5, hy + r * 0.5); c.quadraticCurveTo(hx + dir * r * 0.66, hy + r * 0.58, hx + dir * r * 0.84, hy + r * 0.4); c.stroke();
-    }
-    // 护齿
-    c.fillStyle = L.trunk2; c.beginPath(); c.ellipse(hx + dir * r * 0.72, hy + r * 0.45, r * 0.2, r * 0.1, 0, 0, Math.PI * 2); c.fill();
-    if (face.sweat) { c.fillStyle = 'rgba(160,210,255,0.85)'; c.beginPath(); c.ellipse(hx - dir * r * 0.6, hy - r * 0.9, r * 0.1, r * 0.16, 0, 0, Math.PI * 2); c.fill(); }
   }
 
   function drawDown(c, sx, sy, s, dir, id, body, pose) {
@@ -245,33 +275,21 @@ const VIZ = (() => {
     return '#' + ((1 << 24) + (r << 16) + (g << 8) + bl).toString(16).slice(1);
   }
 
-  // ---------------------------------------------------------------- 回放预处理：每帧每人的动画参数
+  // ---------------------------------------------------------------- 回放预处理
   function prep(rep) {
     if (rep._prep) return rep;
     const n = rep.frames.length, fr = rep.frames;
-    const P = { since: [], fmove: [], suStart: [], recLen: [], hitAt: [], hitBody: [], downAt: [], upAt: [], travel: [], rounds: [] };
-    const last = [-999, -999], lm = [0, 0], su = [-1, -1], hit = [-999, -999], hitB = [0, 0], dn = [-999, -999], up = [-999, -999], trav = [0, 0];
+    const P = { downAt: [], upAt: [], rounds: [] };
+    const dn = [-999, -999], up = [-999, -999];
     for (let t = 0; t < n; t++) {
-      const a = [], b = [], c2 = [], h = [], hb = [], d = [], u = [], tr = [];
+      const d = [], u = [];
       for (let k = 0; k < 2; k++) {
         const f = fr[t].f[k], pf = t ? fr[t - 1].f[k] : f;
-        if (f[F.fired] > 0) { last[k] = t; lm[k] = f[F.fired] - 1; }
-        if (f[F.ph] === PH.STARTUP && pf[F.ph] !== PH.STARTUP) su[k] = t;
-        const o = fr[t].f[1 - k];
-        if (o[F.fired] > 0 && o[F.oc] === 1) { hit[k] = t; hitB[k] = SIM.TGT[o[F.fired] - 1]; }
         if (f[F.ph] === PH.DOWN && pf[F.ph] !== PH.DOWN) dn[k] = t;
         if (f[F.ph] !== PH.DOWN && pf[F.ph] === PH.DOWN) up[k] = t;
-        trav[k] += Math.hypot(f[F.x] - pf[F.x], f[F.y] - pf[F.y]);
-        a.push(t - last[k]); b.push(lm[k]); c2.push(su[k]); h.push(hit[k]); hb.push(hitB[k]); d.push(dn[k]); u.push(up[k]); tr.push(trav[k]);
+        d.push(dn[k]); u.push(up[k]);
       }
-      P.since.push(a); P.fmove.push(b); P.suStart.push(c2); P.hitAt.push(h); P.hitBody.push(hb); P.downAt.push(d); P.upAt.push(u); P.travel.push(tr);
-    }
-    // 每次出拳的收招长度（出拳到回到自由状态）
-    for (let k = 0; k < 2; k++) {
-      let t = 0;
-      while (t < n) {
-        if (fr[t].f[k][F.fired] > 0) { let e = t + 1; while (e < n && fr[e].f[k][F.ph] === PH.RECOVERY) e++; for (let q = t; q < e; q++) (P.recLen[q] = P.recLen[q] || [6, 6])[k] = Math.max(2, e - t); t = e; } else t++;
-      }
+      P.downAt.push(d); P.upAt.push(u);
     }
     // 回合分界
     for (let t = 1; t < n; t++) if (fr[t].r !== fr[t - 1].r) P.rounds.push(t);
@@ -287,87 +305,851 @@ const VIZ = (() => {
       if (f[F.fk]) P.events.push({ t, k, big: 1, text: '被晃了', def: true });
     }
     rep._prep = P;
+    rep._mo = [motion(rep, 0), motion(rep, 1)];
+    link(rep);
+    rep._mo.forEach((mo, k) => { mo.feet = planFeet(rep, k); });
+    rep._mo.forEach((mo, k) => mo.punches.forEach(E => { E.lunge = lungeFor(rep, k, E); }));
     rep._cam = cameraPath(rep);
     return rep;
   }
 
-  // ---------------------------------------------------------------- 从回放算姿势（连续时间）
-  function poseAt(rep, tf, k) {
-    const P = rep._prep, fr = rep.frames, n = fr.length;
-    const t = clamp(Math.floor(tf), 0, n - 1), a = tf - Math.floor(tf);
-    const f = fr[t].f[k], o = fr[t].f[1 - k];
-    const B = build(rep.bodies[k]);
-    const ph = f[F.ph], mv = f[F.mv], post = f[F.post];
-    const dist = Math.hypot(f[F.x] - o[F.x], f[F.y] - o[F.y]);
-    const sh = B.shH;
-    // 待机：上下弹动、呼吸
-    const bob = Math.sin((t + a) * 0.45 + k * 1.7) * 0.012;
-    let crouch = 0.08, lean = 0.05, twist = 0.3, head = [0, bob];
-    let lead = [0.33, sh + 0.02], rear = [0.17, sh + 0.08];
-    if (post === 1) lead = [0.5, sh - 0.02];
-    if (post === 2) { crouch = 0.45; lean = 0.18; lead = [0.27, sh + 0.06]; rear = [0.18, sh + 0.1]; }
-    if (post === 3) { lead = [0.24, B.hipH + 0.12]; rear = [0.1, B.hipH + 0.18]; lean = 0.0; }
-    if (f[F.g] === 1) { lead = [0.2, sh + 0.17]; rear = [0.18, sh + 0.15]; crouch += 0.08; }
-    if (f[F.g] === 2) { lead = [0.2, sh - 0.12]; rear = [0.15, sh - 0.16]; crouch += 0.12; lean += 0.08; }
-    // 头部闪躲
-    if (ph === PH.DEFEND || (ph === PH.RECOVERY && mv >= 13 && mv <= 16)) {
-      const k2 = ph === PH.DEFEND ? 1 : 0.4;
-      if (mv === M.SLIP) { head = [-0.05 * k2, -0.08 * k2]; lean += 0.12 * k2; }
-      if (mv === M.DUCK) { crouch += 0.8 * k2; lean += 0.32 * k2; }
-      if (mv === M.PULL) { lean -= 0.3 * k2; }
-      if (mv === M.PARRY) { lead = [0.4, sh + 0.12 + 0.05 * Math.sin((t + a) * 2)]; }
+  // ---------------------------------------------------------------- 动作时间表
+  // 回放是先算完再播的，往后看得到：每一拳从哪一帧开始预备、哪一帧打到、哪一帧收回、结果如何，都先排出来。
+  // 时间单位是帧（模拟一帧 50 毫秒）。第 s 帧开始处于起手状态的拳，动作从 s−1 开始（那一步做的决定），
+  // 在打出的那一帧（回放里 fired 的那一帧，模拟就在这一帧结算）正好到达落点。
+  const KB_DEFAULT = [0.08, 0.05, 0.25, 0.15, 0.12, 0.08, 0.15, 0.10, 0.10, 0.06, 0.14, 0.08];
+  const TWIST_DEFAULT = [0, 0, 0, 0, 0.25, 0.10, 0.30, 0.10, 0, 0, 0, 0];
+  // 胳膊真正打出去的帧数：发力从脚、胯开始，肩跟上，胳膊最后才出去（刺拳约 100 毫秒，后手、勾拳、上勾拳约 150 毫秒）
+  const armFrames = E => E.typ === 0 && E.hand === 0 ? 2 : 3;
+  // 每帧指向"开始时间不晚于这一帧的最后一个事件"（事件按开始时间排好）
+  function pointers(n, list, key = 't0') {
+    const out = new Int32Array(n).fill(-1);
+    for (let t = 0, j = -1; t < n; t++) { while (j + 1 < list.length && list[j + 1][key] <= t) j++; out[t] = j; }
+    return out;
+  }
+  function motion(rep, k) {
+    const fr = rep.frames, n = fr.length, row = t => fr[clamp(t, 0, n - 1)].f[k], opp = t => fr[clamp(t, 0, n - 1)].f[1 - k];
+    const mo = { punches: [], defs: [], clinches: [], switches: [], hits: [], kb: [], liver: new Uint8Array(n), winded: new Uint8Array(n) };
+    // 出拳、虚晃、扑抱
+    for (let t = 1; t < n;) {
+      const f = row(t);
+      if (f[F.ph] !== PH.STARTUP) { t++; continue; }
+      const mv = f[F.mv], s = t, feint = f[F.act] === ACT.FEINT_JAB || f[F.act] === ACT.FEINT_CROSS;
+      let e = s + 1;
+      while (e < n && row(e)[F.ph] === PH.STARTUP && row(e)[F.mv] === mv && !(feint && e - s >= 2)) e++;
+      const recEnd = from => { let r = from; while (r < n && row(r)[F.ph] === PH.RECOVERY && row(r)[F.mv] === mv) r++; return r; };
+      if (mv === M.CLINCH) {
+        const ok = e < n && row(e)[F.ph] === PH.CLINCH;      // 抱住了：扑过去的前探在 3 帧里收成抱住的姿势；没抱住：收招时慢慢站回来
+        mo.clinches.push({ t0: s - 1, t1: e, t2: ok ? e + 3 : Math.max(e + 1, recEnd(e)), ok });
+      } else if (mv < 12) {
+        const E = { hand: SIM.HAND[mv], p: mv, typ: SIM.TYPE[mv], tgt: SIM.TGT[mv], s, t0: s - 1, feint, oc: 0,
+          left: (SIM.HAND[mv] === 0) === (f[F.st] >= 0) };                  // 是不是左手打的（肝在对手右侧，左勾拳最容易打到）
+        if (feint) { E.tb = E.ta = E.t0; E.t1 = e; E.t2 = e + 2; }
+        else if (e < n && row(e)[F.fired] === mv + 1) {
+          const g = row(e), og = opp(e), pr = f[F.prep] !== undefined ? f[F.prep] : 0;     // 旧回放（v13 以前）没有身体预备
+          E.tb = E.t0 + clamp(pr, 0, e - s - 1); E.t1 = e; E.ta = Math.max(E.tb, E.t1 - armFrames(E));
+          E.oc = g[F.oc]; E.zone = g[F.zone]; E.glance = !!g[F.gl]; E.ctr = !!g[F.ctr]; E.dmg = g[F.dmg]; E.ev = og[F.ev]; E.kd = !!og[F.kd];
+          // 被什么挡住：旧回放没记，按防守方上一帧举没举架推出来（模拟里就是这么判的）
+          E.blk = g[F.blk] !== undefined ? g[F.blk] : E.oc === 2 ? (opp(e - 1)[F.g] > 0 ? opp(e - 1)[F.g] : 3) : 0;
+          const r = recEnd(e), next = r < n ? row(r)[F.ph] : PH.FREE;
+          // 收招被下一拳接上（组合拳）时，这只手还要按原来的节奏收回来
+          E.t2 = e + (next === PH.STARTUP ? Math.max(2 * (r - e), r - e + 2) : Math.max(2, r - e + (next === PH.FREE ? 0 : 1)));
+        } else {
+          // 起手被打断（挨打、被打倒、被抱住、回合结束）：胳膊走到一半收回来
+          const su = f[F.su] > 0 ? f[F.su] : e - s + 2, pr = f[F.prep] !== undefined ? f[F.prep] : 0;
+          E.tb = E.t0 + clamp(pr, 0, su - 1); E.t1 = s + su; E.ta = Math.max(E.tb, E.t1 - armFrames(E)); E.cut = e; E.t2 = e + 3;
+        }
+        mo.punches.push(E);
+      }
+      t = e;
     }
-    // 出拳：起手蓄力 → 出拳（快）→ 收招（慢）
-    const pose = { crouch, lean, twist, head, lead, rear, face: {} };
-    const since = P.since[t][k] + a, fm = P.fmove[t][k];
-    const recLen = (P.recLen[t] && P.recLen[t][k]) || 6;
-    let ext = 0;
-    if (ph === PH.RECOVERY && mv < 12 && since < recLen + 1) ext = since < 1.2 ? easeOut(since / 1.2) : 1 - ease((since - 1.2) / Math.max(1, recLen - 1.2));
-    if (ph === PH.STARTUP && mv < 12) {
-      const prog = clamp((t + a - P.suStart[t][k]) / 4, 0, 1);
-      const hand = SIM.HAND[mv];
-      if (hand === 0) pose.lead = [lead[0] - 0.06 * prog, lead[1] + 0.02 * prog]; else { pose.rear = [rear[0] - 0.1 * prog, rear[1] - 0.02 * prog]; pose.twist = twist - 0.15 * prog; }
-      if (SIM.TYPE[mv] === 2) pose.crouch += 0.15 * prog;
+    // 同一只手的下一拳开始时，上一拳一定已经收回
+    for (let h = 0; h < 2; h++) {
+      const list = mo.punches.filter(E => E.hand === h);
+      for (let i = 0; i + 1 < list.length; i++) {
+        const E = list[i], nx = list[i + 1].t0;           // 虚晃没有打到那一下，连着晃就在下一次开始时正好收完
+        E.t2 = E.feint ? Math.max(E.t0 + 0.5, Math.min(E.t2, nx)) : Math.max(Math.min(E.t2, nx), (E.cut ?? E.t1) + 0.5);
+      }
     }
-    if (ext > 0.001) {
-      const typ = SIM.TYPE[fm], tgt = SIM.TGT[fm], hand = SIM.HAND[fm];
-      const reachMax = (B.ua + B.fa) * 0.98 + (hand === 1 ? 0.12 : 0.05);
-      const tx = Math.min(reachMax + 0.15, Math.max(0.35, dist - 0.2)), ty = tgt === 0 ? sh + 0.12 : sh - 0.22;
-      const from = hand === 0 ? lead : rear;
-      let g;
-      if (typ === 0) g = [lerp(from[0], tx, ext), lerp(from[1], ty, ext)];
-      else if (typ === 1) g = [from[0] + (tx * 0.82 - from[0]) * Math.sin(ext * Math.PI / 2), lerp(from[1], ty, ext) + 0.08 * Math.sin(ext * Math.PI)];
-      else g = [lerp(from[0], tx * 0.7, ext), from[1] - 0.22 * Math.sin(ext * Math.PI) * (1 - ext) + (ty - from[1]) * ext];
-      if (hand === 0) { pose.lead = g; pose.leadBig = typ === 2; pose.leadBody = tgt === 1; }
-      else { pose.rear = g; pose.rearBig = typ >= 1; pose.rearBody = tgt === 1; pose.twist = twist + 0.55 * ext; pose.lean = lean + 0.1 * ext; }
-      if (tgt === 1) { pose.crouch += 0.25 * ext; pose.lean += 0.12 * ext; }
-      if (typ === 2) pose.crouch += 0.1 * (1 - ext);
+    // 防守：拍挡、侧闪、下潜、后仰。时机窗口（防守中）一开始就有效，所以动作在窗口开始时已经做到位；收招时慢慢回位
+    for (let t = 1; t < n;) {
+      const f = row(t);
+      if (f[F.ph] !== PH.DEFEND) { t++; continue; }
+      const m = f[F.mv], s = t;
+      let e = s + 1; while (e < n && row(e)[F.ph] === PH.DEFEND && row(e)[F.mv] === m) e++;
+      let r = e; while (r < n && row(r)[F.ph] === PH.RECOVERY && row(r)[F.mv] === m) r++;
+      mo.defs.push({ m, s, t0: s - 1, ta: s + 0.3, t1: e, t2: Math.max(r, e + 1) });
+      t = e;
     }
-    // 挨打：头往后甩、身体回弹；打身体就弯腰
-    const sinceHit = t + a - P.hitAt[t][k];
-    if (sinceHit >= 0 && sinceHit < 8) {
-      const amp = Math.exp(-sinceHit / 2.5) * Math.cos(sinceHit * 0.9);
-      if (P.hitBody[t][k]) { pose.lean += 0.25 * amp; pose.crouch += 0.2 * Math.max(0, amp); }
-      else { pose.head = [pose.head[0] - 0.09 * amp, pose.head[1] + 0.02 * amp]; pose.lean -= 0.22 * amp; }
-      pose.flash = sinceHit < 1.5 && o[F.oc] === 1;
+    // 换架势、换站架：模拟在换完那一帧才改，画面在这几帧里换过去
+    for (let t = 1; t < n;) {
+      const f = row(t);
+      if (!(f[F.ph] === PH.MOVING && (f[F.mv] === M.POSTURE || f[F.mv] === M.STANCE))) { t++; continue; }
+      const m = f[F.mv], s = t;
+      let e = s + 1; while (e < n && row(e)[F.ph] === PH.MOVING && row(e)[F.mv] === m) e++;
+      // 换到一半被打断（挨打、倒地）的，模拟里架势没变，画面也不换
+      const done = e < n && (m === M.POSTURE ? row(e)[F.post] !== row(s - 1)[F.post] : row(e)[F.st] !== row(s - 1)[F.st]);
+      if (done) mo.switches.push({ kind: m === M.POSTURE ? 'post' : 'stance', t0: s - 1, t1: e, to: row(e)[F.post] });
+      t = e;
     }
-    // 缠抱：抱在一起
-    if (ph === PH.CLINCH) { pose.lean = 0.35; pose.lead = [dist + 0.05, sh - 0.05]; pose.rear = [dist - 0.05, sh - 0.12]; pose.crouch = 0.15; }
-    // 倒地与站起
-    const sinceDown = t + a - P.downAt[t][k], sinceUp = t + a - P.upAt[t][k];
-    if (ph === PH.DOWN) pose.down = clamp(sinceDown / 7, 0.02, 1);
-    else if (sinceUp >= 0 && sinceUp < 12) pose.down = 1 - ease(sinceUp / 12);
-    // 步伐：按走过的距离迈步
-    const tr = P.travel[t][k] + (P.travel[Math.min(n - 1, t + 1)][k] - P.travel[t][k]) * a;
-    const cyc = tr / 0.32 * Math.PI * 2;
-    const moving = t > 0 && Math.abs(P.travel[Math.min(n - 1, t + 1)][k] - P.travel[Math.max(0, t - 1)][k]) > 0.01;
-    const stride = moving ? 0.07 : 0.0;
-    const wide = post === 2 ? 0.04 : 0;
-    pose.feet = [0.25 + wide + stride * Math.sin(cyc), -0.22 - wide + stride * Math.sin(cyc + Math.PI),
-      moving ? 0.035 * Math.max(0, Math.cos(cyc)) : 0, moving ? 0.035 * Math.max(0, Math.cos(cyc + Math.PI)) : 0];
-    // 表情
-    pose.face = { hurt: f[F.stun] > 60, tilt: f[F.tilt], sweat: f[F.stam] < 0.3 };
-    return pose;
+    // 旧回放（换架势、换站架还不花时间的规则）里是一帧之内换的：补 3 帧过渡
+    for (let t = 1; t < n; t++) {
+      const f = row(t), pf = row(t - 1);
+      if (fr[t].r !== fr[t - 1].r) continue;
+      for (const kind of ['post', 'stance']) {
+        if (kind === 'post' ? f[F.post] === pf[F.post] : f[F.st] === pf[F.st]) continue;
+        if (mo.switches.some(q => q.kind === kind && q.t1 === t)) continue;
+        mo.switches.push({ kind, t0: Math.max(0, t - 3), t1: t, to: f[F.post] });
+      }
+    }
+    mo.switches.sort((a, b) => a.t0 - b.t0);
+    for (let t = 0; t < n; t++) { mo.liver[t] = row(t)[F.liv] || 0; mo.winded[t] = row(t)[F.wind] || 0; }
+    // 缠抱住的那几段（模拟里两个人同时进、同时出）
+    mo.holds = [];
+    for (let t = 1; t < n;) {
+      if (row(t)[F.ph] !== PH.CLINCH) { t++; continue; }
+      let e = t + 1; while (e < n && row(e)[F.ph] === PH.CLINCH) e++;
+      mo.holds.push({ s: t, e }); t = e;
+    }
+    mo.hdptr = pointers(n, mo.holds.map(q => ({ t0: q.s - 1 })));
+    return mo;
+  }
+
+  // 两个人的时间表对上：挨了哪几拳（挨打的反应、击退）、防守是冲着哪一拳去的（往哪边闪、用哪只手拍）
+  function link(rep) {
+    const fr = rep.frames, n = fr.length, KB = SIM.KB || KB_DEFAULT, TW = SIM.TWIST || TWIST_DEFAULT;
+    for (let k = 0; k < 2; k++) {
+      const mo = rep._mo[k], om = rep._mo[1 - k], row = t => fr[clamp(t, 0, n - 1)].f[k], opp = t => fr[clamp(t, 0, n - 1)].f[1 - k];
+      for (const E of om.punches) {
+        if (E.oc !== 1 && E.oc !== 2) continue;
+        let h = E.t1; while (h < n && (row(h)[F.ph] === PH.HITSTUN || row(h)[F.ph] === PH.BLOCKSTUN)) h++;
+        mo.hits.push({ t: E.t1, E, dur: Math.max(2, h - E.t1), side: E.left ? -1 : 1 });     // 挨打的是自己哪一侧（对手左手打来落在右侧）
+        // 击退、勾拳把身体打歪：模拟里和这一拳同一帧生效
+        const a0 = opp(E.t1 - 1), d0 = row(E.t1 - 1), d1 = row(E.t1);
+        let ux = d0[F.x] - a0[F.x], uy = d0[F.y] - a0[F.y]; const ul = Math.hypot(ux, uy) || 1; ux /= ul; uy /= ul;
+        const ab = rep.bodies[1 - k], db = rep.bodies[k];
+        let mag = KB[E.p] * (ab.power || 1) * (75 / (db.mass || 72)) * (E.oc === 1 ? 1 : 0.25);
+        mag = clamp(Math.min(mag, (d1[F.x] - d0[F.x]) * ux + (d1[F.y] - d0[F.y]) * uy), 0, mag);
+        const tw = E.oc === 1 && E.typ === 1 ? TW[E.p] * (E.hand === 0 ? 1 : -1) * (opp(E.t1)[F.st] < 0 ? -1 : 1) : 0;
+        mo.kb.push({ t1: E.t1, v: [ux * mag, uy * mag], tw, dur: 1.5 });
+      }
+      // 被拉开、拉拢（击倒后回中立角、裁判分开缠抱、抱上去时两人贴到一起）：模拟里一帧之内移过去，画面上走过去
+      for (let t = 1; t < n; t++) {
+        if (fr[t].r !== fr[t - 1].r) continue;            // 回合开始回角落：转播在这里切到回合间
+        const f = row(t), pf = row(t - 1), q = mo.kb.find(b => b.t1 === t), hold = f[F.ph] === PH.CLINCH && pf[F.ph] !== PH.CLINCH;
+        const vx = f[F.x] - pf[F.x] - (q ? q.v[0] : 0), vy = f[F.y] - pf[F.y] - (q ? q.v[1] : 0);
+        if (Math.hypot(vx, vy) < (hold ? 0.03 : 0.25)) continue;
+        mo.kb.push({ t1: t, v: [vx, vy], tw: 0, dur: f[F.ph] === PH.DOWN || opp(t)[F.ph] === PH.DOWN ? 14 : hold ? 3 : 5 });
+      }
+      mo.kb.sort((a, b) => a.t1 - b.t1);
+      mo.hits.sort((a, b) => a.t - b.t);
+      // 旧回放没记肝区击倒前弯腰：倒地那一帧对手没打中人、之前 1~2 秒有一记干净的身体拳，就是它
+      if (row(0)[F.liv] === undefined) for (let t = 1; t < n; t++) {
+        if (!(row(t)[F.ph] === PH.DOWN && row(t - 1)[F.ph] !== PH.DOWN) || (opp(t)[F.fired] && opp(t)[F.oc] === 1)) continue;
+        const E = om.punches.filter(q => q.oc === 1 && q.tgt === 1 && t - q.t1 >= 19 && t - q.t1 <= 41).pop();
+        if (E) { for (let q = E.t1 + 1; q < t; q++) mo.liver[q] = 1; E.zone = 3; }
+      }
+      // 防守冲着哪一拳：窗口里打过来的那一拳（被它躲开的优先）
+      for (const D of mo.defs) {
+        const inc = om.punches.filter(E => !E.feint && E.oc && E.t1 >= D.s && E.t1 < D.t2);
+        const E = inc.find(q => q.oc === 3 && q.ev === D.m) || inc[0] || null;
+        const ls = row(D.s)[F.st] < 0 ? -1 : 1, lo = opp(D.s)[F.st] < 0 ? -1 : 1;
+        const sideA = E ? (E.left ? 1 : -1) : lo;            // 来拳是对手的左手还是右手（没有来拳按对手的前手）
+        D.inc = E;
+        D.side = -sideA;                                     // 往来拳那只胳膊的外侧闪：对手的左手在自己右侧
+        D.hand = D.side === ls ? 0 : 1;                      // 拍挡用来拳那一侧的手
+      }
+      mo.hptr = pointers(n, mo.hits, 't');
+      mo.kbptr = pointers(n, mo.kb, 't1');
+      mo.dptr = pointers(n, mo.defs);
+      mo.cptr = pointers(n, mo.clinches);
+      mo.sptr = pointers(n, mo.switches);
+      mo.byHand = [0, 1].map(h => mo.punches.filter(E => E.hand === h));
+      mo.ptr = mo.byHand.map(list => pointers(n, list));
+    }
+  }
+  function clinchWeight(mo, tf) {
+    const sp = mo.holds[mo.hdptr[clamp(Math.floor(tf) + 1, 0, mo.hdptr.length - 1)]];
+    if (!sp) return 0;
+    return tf < sp.s ? ease(clamp((tf - (sp.s - 0.5)) / 0.5, 0, 1)) : tf < sp.e ? 1 : 1 - ease(clamp((tf - sp.e) / 4, 0, 1));
+  }
+  // 打到的时刻离 tf 不到 win 帧的拳（不管那一拳这时开始起手了没有：快拳从起手到打到不足 win 帧，按"正在出拳"找会在起手那一刻突然冒出来）
+  function punchesNear(mo, tf, win) {
+    const out = [], n = mo.ptr[0].length;
+    for (let h = 0; h < 2; h++) {
+      const list = mo.byHand[h];
+      for (let i = mo.ptr[h][clamp(Math.floor(tf + win), 0, n - 1)]; i >= 0; i--) {
+        const E = list[i];
+        if (E.t1 < tf - win - 8) break;
+        if (E.oc && Math.abs(tf - E.t1) <= win) out.push(E);
+      }
+    }
+    return out;
+  }
+  function activePunch(mo, h, tf) {
+    const t = Math.floor(tf), arr = mo.ptr[h];
+    if (t < 0 || t >= arr.length || arr[t] < 0) return null;
+    const E = mo.byHand[h][arr[t]];
+    return tf >= E.t0 && tf < E.t2 ? E : null;
+  }
+
+  // ---------------------------------------------------------------- 三维拳手
+  // 模拟是俯视的二维：位置 (x, y)、朝向 th。画面里每个拳手是一副三维骨骼（z 是离台面的高度），按模拟的位置、朝向、
+  // 动作时间摆好，再用转播机位投影。局部坐标：前（朝向 th）、左、上；左右按解剖学，正架左脚在前、反架右脚在前。
+  // 所见即模拟：拳在打出那一帧到达落点；被挡停在对方的护手上，被躲开就打到头原来的位置，射程不够就停在半空差那么一截。
+  const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const mul3 = (a, k) => [a[0] * k, a[1] * k, a[2] * k], dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const len3 = a => Math.hypot(a[0], a[1], a[2]), norm3 = a => mul3(a, 1 / (len3(a) || 1));
+  const lerp3 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+  const bez3 = (a, c, b, t) => lerp3(lerp3(a, c, t), lerp3(c, b, t), t);
+  const wrapPi = a => a - 2 * Math.PI * Math.floor((a + Math.PI) / (2 * Math.PI));
+  const fatigueOf = sf => sf >= 0.5 ? 0 : sf >= 0.2 ? 0.4 * (0.5 - sf) / 0.3 : 0.4 + 0.6 * (0.2 - Math.max(0, sf)) / 0.2;   // 同 boxing.fatigue
+
+  // 骨骼尺寸。胳膊长按臂展定：满射程的拳胳膊伸直还差一截，要往前送一步才打得到（现实里刺拳也是上步打的）
+  function rig(body) {
+    const B = build(body), H = B.H, reach = body ? body.reach : 0.75, mass = body ? body.mass : 72;
+    const arm = 0.36 * H * (1 + 0.8 * (reach - 0.75));
+    return { ...B, armLen: arm, ua: arm * 0.52, fa: arm * 0.48, thigh: 0.245 * H, shin: 0.245 * H, ankle: 0.07,
+      hipZ: 0.465 * H, spine: 0.3 * H, neckL: 0.045 * H, shHalf: 0.15 + 0.035 * B.mus, hipHalf: 0.085 + 0.002 * (mass - 72),
+      chestD: 0.09 + 0.035 * B.mus, waistD: 0.085 };
+  }
+  const rigOf = (rep, k) => (rep._rig || (rep._rig = [rig(rep.bodies[0]), rig(rep.bodies[1])]))[k];
+
+  // 绕着肩膀 S 在 P、Q 两个位置之间过渡：方向按球面插值，离肩膀的远近线性插值。护手从腹前抬到额前（AI 常常只举一帧高位格挡）时，
+  // 拳套从身前绕个弧上去，不会擦着肩膀走直线把胳膊折死、肘绕着胳膊乱转
+  function polar(S, P, Q, w) {
+    if (w <= 0) return P;
+    if (w >= 1) return Q;
+    const a = sub3(P, S), b = sub3(Q, S), ra = len3(a), rb = len3(b);
+    if (ra < 1e-6 || rb < 1e-6) return lerp3(P, Q, w);
+    const na = mul3(a, 1 / ra), nb = mul3(b, 1 / rb), om = Math.acos(clamp(dot3(na, nb), -1, 1));
+    const dir = om < 1e-4 ? lerp3(na, nb, w) : add3(mul3(na, Math.sin((1 - w) * om) / Math.sin(om)), mul3(nb, Math.sin(w * om) / Math.sin(om)));
+    return add3(S, mul3(norm3(dir), lerp(ra, rb, w)));
+  }
+  // 点 p 离线段 a–b 不到 r 就沿垂直方向推到 r 处（a = b 时就是球）
+  function outside(p, a, b, r) {
+    const ab = sub3(b, a), t = clamp(dot3(sub3(p, a), ab) / (dot3(ab, ab) || 1), 0, 1), q = add3(a, mul3(ab, t)), v = sub3(p, q), d = len3(v);
+    return d >= r || d < 1e-6 ? p : add3(q, mul3(v, r / d));
+  }
+  // 两段骨骼的三维反向运动学：根 a、末端 b，pole 指向关节（肘、膝）往哪边弯。够不着就伸直指向末端。
+  // pole 和骨头几乎平行时（比如手垂在腹前、提示又是"肘往下"），往哪边弯定不下来，关节会绕着骨头乱转：按夹角平滑地掺进备用方向 alt
+  function ik3(a, b, l1, l2, pole, alt) {
+    let d = sub3(b, a), L = len3(d);
+    const Lmax = (l1 + l2) * 0.999, Lmin = Math.abs(l1 - l2) + 0.02;
+    if (L > Lmax) { b = add3(a, mul3(d, Lmax / L)); d = sub3(b, a); L = Lmax; }
+    else if (L < Lmin) { b = add3(a, mul3(norm3(L > 1e-6 ? d : pole), Lmin)); d = sub3(b, a); L = Lmin; }
+    const u = mul3(d, 1 / L), x = (l1 * l1 - l2 * l2 + L * L) / (2 * L), hgt = Math.sqrt(Math.max(0, l1 * l1 - x * x));
+    const perp = v => { const q = norm3(v); return sub3(q, mul3(u, dot3(q, u))); };
+    let p = perp(pole);
+    if (alt) p = add3(p, mul3(perp(alt), clamp(1 - len3(p) / 0.5, 0, 1)));
+    if (len3(p) < 1e-6) p = Math.abs(u[2]) < 0.9 ? add3([0, 0, -1], mul3(u, u[2])) : [1, 0, 0];
+    return { E: add3(add3(a, mul3(u, x)), mul3(norm3(p), hgt)), G: b };
+  }
+
+  // 下一帧（插值用）。回合开始两人回到角落：不往那边插值，这一回合的最后一帧就停在原地
+  const nextRow = (fr, t, k) => t + 1 < fr.length && fr[t + 1].r === fr[t].r ? fr[t + 1].f[k] : fr[t].f[k];
+  // 位置和朝向（连续时间）。击退、勾拳打歪身体、被拉开，在模拟里都是一帧之内的事：画面上推迟到拳到了以后再发生，
+  // 挨打的人不会在拳到之前先往后飘；被拉开的两个人用几帧走开，不瞬移
+  function placeAt(rep, tf, k) {
+    const fr = rep.frames, n = fr.length, t = clamp(Math.floor(tf), 0, n - 1), a = clamp(tf - t, 0, 1);
+    const f = fr[t].f[k], g = nextRow(fr, t, k), mo = rep._mo[k];
+    let x = lerp(f[F.x], g[F.x], a), y = lerp(f[F.y], g[F.y], a), th = f[F.th] + wrapPi(g[F.th] - f[F.th]) * a;
+    for (let i = mo.kbptr[Math.min(n - 1, t + 1)]; i >= 0; i--) {
+      const q = mo.kb[i];
+      if (q.t1 < tf - 16) break;
+      let w = 0;
+      if (tf > q.t1 - 1 && tf <= q.t1) w = tf - (q.t1 - 1);
+      else if (tf > q.t1 && tf < q.t1 + q.dur) w = 1 - (q.dur < 2 ? easeOut : ease)((tf - q.t1) / q.dur);
+      x -= q.v[0] * w; y -= q.v[1] * w; th -= q.tw * w;
+    }
+    return [x, y, th];
+  }
+
+  // 脚步：拳击是滑步，两只脚不交叉。脚落地以后钉在台面上，离该在的位置远了才迈一步：
+  // 往前走前脚先动、后脚跟上，往后退后脚先动，横移靠那一侧的脚先动；轴转时前脚钉住当轴
+  const STANCE_W = [1, 1.12, 1.15, 1];
+  function footHome(f, side) {                 // side：+1 左脚、−1 右脚。返回局部 [前, 左, 脚尖朝向]
+    const ls = f[F.st] < 0 ? -1 : 1, w = STANCE_W[f[F.post]] || 1;
+    return side === ls ? [0.2 * w, ls * 0.1 * w, -ls * 0.25] : [-0.22 * w, -ls * 0.12 * w, -ls * 0.85];
+  }
+  function planFeet(rep, k) {
+    const fr = rep.frames, n = fr.length, out = new Array(n);
+    const home = (t, side) => {
+      const [x, y, th] = placeAt(rep, t, k), h = footHome(fr[t].f[k], side), c = Math.cos(th), s = Math.sin(th);
+      return [x + c * h[0] - s * h[1], y + s * h[0] + c * h[1], th + h[2]];
+    };
+    let feet = [home(0, 1), home(0, -1)], step = null, prevFoot = -1;
+    const roundEnd = new Int32Array(n);                    // 这一回合的最后一帧：往后看落脚点不看到下一回合（回合开始两人回到角落）
+    for (let t = n - 1; t >= 0; t--) roundEnd[t] = t + 1 < n && fr[t + 1].r === fr[t].r ? roundEnd[t + 1] : t;
+    for (let t = 0; t < n; t++) {
+      const f = fr[t].f[k];
+      if (step && t >= step.t1) { const s = step; feet = feet.map((p, i) => i === s.i ? s.b : p); step = null; }
+      if (t > 0 && fr[t].r !== fr[t - 1].r) { step = null; feet = [home(t, 1), home(t, -1)]; }
+      else if (!step && f[F.ph] !== PH.DOWN) {
+        const last = roundEnd[t], la = Math.min(last, t + 2), want = [home(la, 1), home(la, -1)];
+        const err = want.map((w, i) => Math.hypot(w[0] - feet[i][0], w[1] - feet[i][1]) + 0.12 * Math.abs(wrapPi(w[2] - feet[i][2])));
+        const ls = f[F.st] < 0 ? -1 : 1, lead = ls > 0 ? 0 : 1;
+        const [x0, y0] = placeAt(rep, Math.max(0, t - 1), k), [x1, y1, th] = placeAt(rep, Math.min(last, t + 1), k);
+        const vf = Math.cos(th) * (x1 - x0) + Math.sin(th) * (y1 - y0), vl = -Math.sin(th) * (x1 - x0) + Math.cos(th) * (y1 - y0);
+        const first = Math.abs(vf) >= Math.abs(vl) ? (vf >= 0 ? lead : 1 - lead) : (vl * ls >= 0 ? lead : 1 - lead);
+        const pivot = f[F.ph] === PH.MOVING && (f[F.mv] === M.PIVL || f[F.mv] === M.PIVR);
+        // 离该在的位置远了的脚才迈。都远了：该先动的那只优先，刚迈过的那只让一让——一直往一边绕、连续轴转时两只脚交替跟上，
+        // 不会只迈一只脚，把另一只甩在后面把腿拉直
+        const need = [0, 1].map(i => err[i] - (pivot && i === lead ? 0.2 : 0.07));
+        const pri = [0, 1].map(i => need[i] + (i === first ? 0.05 : 0) + (i !== prevFoot ? 0.06 : 0));
+        const i = [0, 1].filter(q => need[q] > 0).sort((a, b) => pri[b] - pri[a])[0] ?? -1;
+        if (i >= 0) {
+          const T = err[i] > 0.25 ? 2 : 3;
+          step = { i, t0: t, t1: t + T, a: feet[i], b: home(Math.min(last, t + T + 1), i ? -1 : 1), lift: i === first && !pivot ? 0.035 : 0.012 };
+          prevFoot = i;
+        }
+      }
+      out[t] = { p: feet, step };
+    }
+    return out;
+  }
+  function feetAt(rep, k, tf) {
+    const pl = rep._mo[k].feet, st = pl[clamp(Math.floor(tf), 0, pl.length - 1)], s = st.step;
+    return [0, 1].map(i => {
+      if (s && s.i === i && tf >= s.t0 && tf < s.t1) {
+        const u = (tf - s.t0) / (s.t1 - s.t0), e = ease(u);
+        return { p: [lerp(s.a[0], s.b[0], e), lerp(s.a[1], s.b[1], e)], yaw: s.a[2] + wrapPi(s.b[2] - s.a[2]) * e, lift: s.lift * Math.sin(Math.PI * u) };
+      }
+      return { p: [st.p[i][0], st.p[i][1]], yaw: st.p[i][2], lift: 0 };
+    });
+  }
+
+  // 架势：肩线侧过去多少（前肩在前）、重心降多少、前倾多少；护手位置相对头的中心，局部 [前, 朝前手一侧, 上]
+  const POST_ALPHA = [0.6, 0.75, 0.45, 0.9], POST_CROUCH = [0.02, 0.02, 0.12, 0.02], POST_PITCH = [0.12, 0.1, 0.3, 0.06];
+  const GUARD_POS = [
+    [[0.2, 0.06, -0.06], [0.12, -0.08, -0.08]],        // 标准高位：前手在颧骨前，后手贴下巴
+    [[0.42, 0.04, -0.14], [0.12, -0.08, -0.08]],       // 长架：前手伸出去顶住对手
+    [[0.14, 0.06, 0.0], [0.12, -0.06, -0.02]],         // 低姿抱架：两手贴着额头和脸颊
+    [[0.16, -0.02, -0.46], [0.1, -0.07, -0.08]],       // 低手位（肩卷）：前手横在腹前，后手贴下巴，前肩抬起
+  ];
+  const HIGH_GUARD = [[0.12, 0.06, 0.03], [0.11, -0.06, 0.01]];       // 高位格挡：两手挡在额前
+  const BODY_GUARD = [[0.14, 0.07, -0.15], [0.12, -0.07, -0.16]];     // 护体：手在下巴前，小臂、手肘护住肋部
+  function guardLocal(f, ls, post, post2, pu, su) {
+    const gt = f[F.g];
+    const pick = h => gt === 1 ? HIGH_GUARD[h] : gt === 2 ? BODY_GUARD[h] : lerp3(GUARD_POS[post][h], GUARD_POS[post2][h], pu);
+    const anat = (v, s) => [v[0], v[1] * s, v[2]];
+    // 换站架时前后手对调：每只手从原来的角色换到新的角色
+    const gl = [0, 1].map(h => su > 0 ? lerp3(anat(pick(h), ls), anat(pick(1 - h), -ls), su) : anat(pick(h), ls));
+    return { gl, crouch: lerp(POST_CROUCH[post], POST_CROUCH[post2], pu) + (gt === 1 ? 0.03 : gt === 2 ? 0.06 : 0),
+      pitch: lerp(POST_PITCH[post], POST_PITCH[post2], pu) + (gt === 1 ? 0.05 : gt === 2 ? 0.08 : 0) + (gt === 1 && f[F.act] === ACT.GUARD_FWD ? 0.05 : 0),
+      alpha: gt > 0 ? 0.45 : lerp(POST_ALPHA[post], POST_ALPHA[post2], pu) };                  // 举架、护体时肩膀收正
+  }
+
+  // 一拳的发力进度：ld 是预备（转肩、移重心、屈膝），dr 是发力（从预备结束到打到：胯带肩，手到落点时到顶），打完以后回位；
+  // 打空、被躲开的多转一截
+  function punchDrive(E, tf) {
+    const end = E.cut ?? E.t1, span = t => clamp((t - E.tb) / Math.max(0.5, E.t1 - E.tb), 0, 1);
+    const pre = clamp((tf - E.t0) / Math.max(0.5, E.tb - E.t0), 0, 1), arm = span(tf);
+    // 上步和胳膊一起出、越到最后越快，正好在拳到的那一刻落地（身体的冲劲压在拳上）；转胯带肩比手先到位
+    let dr = ease(clamp(arm * 1.15, 0, 1)), lg = clamp((tf - E.ta) / Math.max(0.5, E.t1 - E.ta), 0, 1) ** 2;
+    if (tf > end) {
+      const r = clamp((tf - end) / Math.max(1, E.t2 - end), 0, 1);
+      if (E.cut !== undefined) dr = Math.min(dr, ease(clamp(span(E.cut) * 1.15, 0, 1)));
+      // 往前送的那一步、转过去的腰都跟着拳一起收：拳收回来之前身体不先退、不先转回去（不然胳膊够不着）。打空、被躲开的多转一截
+      const back = 1 - retract(E, tf), over = E.oc === 3 || E.oc === 4 ? 1 + 0.15 * Math.sin(Math.PI * Math.min(1, r * 2.5)) : 1;
+      lg = dr * back;
+      dr *= over * back;
+    }
+    return { ld: ease(pre) * (1 - ease(arm)), dr, lg };
+  }
+  // 打到以后拳收回来的进度：打中的贴一下再收，被挡的弹回来，打空、被躲开的顺势送完再收
+  function retract(E, tf) {
+    const end = E.cut ?? E.t1, span = E.t2 - end;
+    // 同一只手紧接着又出拳时收招被截短：贴一下、顺势送的那段跟着缩短，保证下一拳开始时拳已经回到护手位置
+    const hold = Math.min(E.cut !== undefined ? 0 : E.oc === 1 ? 0.6 : E.oc === 2 ? 0.2 : 0.8, span * 0.4);
+    return ease(clamp((tf - end - hold) / Math.max(0.1, span - hold), 0, 1));
+  }
+
+  // 身体（不含胳膊）：骨盆、脊柱、肩、头、腿脚，以及护手该在的位置。mode.core：不往前送步（算出拳要送多少步时用，免得两边互相引用），mode.lunge 只给这一拳试一个步幅；
+  // mode.noDef：不做闪躲（算"头原来在哪"时用）；mode.noDown：不管倒地
+  function bodyPose(rep, tf, k, mode = {}) {
+    const fr = rep.frames, n = fr.length, t = clamp(Math.floor(tf), 0, n - 1), a = clamp(tf - t, 0, 1);
+    const t2 = Math.min(n - 1, t + 1), f = fr[t].f[k], g = nextRow(fr, t, k), mo = rep._mo[k], R = rigOf(rep, k), P = rep._prep;
+    if (!mode.noDown) {
+      if (f[F.ph] === PH.DOWN && P.downAt[t][k] >= 0) return downPose(rep, tf, k, P.downAt[t][k], null);
+      const uAt = P.upAt[t][k];
+      if (uAt > 0 && tf - uAt < 12) return downPose(rep, tf, k, P.downAt[uAt - 1][k], uAt);
+    }
+    const [x, y, th] = placeAt(rep, tf, k), c = Math.cos(th), s = Math.sin(th);
+    const W = (lf, ll, lz) => [x + c * lf - s * ll, y + s * lf + c * ll, lz];        // 局部 → 世界
+    const Wv = (lf, ll, lz) => [c * lf - s * ll, s * lf + c * ll, lz];               // 局部方向 → 世界方向
+    const ls = f[F.st] < 0 ? -1 : 1;
+    let post = f[F.post], post2 = post, pu = 0, su = 0;
+    const sw = mo.switches[mo.sptr[t]];
+    if (sw && tf >= sw.t0 && tf < sw.t1) { const u = ease((tf - sw.t0) / (sw.t1 - sw.t0)); if (sw.kind === 'post') { post2 = sw.to; pu = u; } else su = u; }
+    const gA = guardLocal(f, ls, post, post2, pu, su), gB = guardLocal(g, ls, post, post2, pu, su);
+    // 护手位置：这一帧和下一帧、换架势前和换架势后，各算一个，最后绕着肩膀过渡（见 polar）
+    const gF = [0, 1].map(w => guardLocal(f, ls, post, post2, w, su)), gG = [0, 1].map(w => guardLocal(g, ls, post, post2, w, su));
+    let crouch = lerp(gA.crouch, gB.crouch, a), pitch = lerp(gA.pitch, gB.pitch, a), roll = 0, pelF = 0, pelL = 0;
+    let yaw = ls * lerp(gA.alpha, gB.alpha, a) * (1 - 2 * su);       // 带符号的转腰：+ = 左肩在前（换站架时转过去）
+    let headF = 0.04, headL = 0, headZ = 0, headYaw = 0, guardPush = 0, flash = false, slide = 0, lungePitch = 0;
+    const heel = [0, 0], fyaw = [0, 0];                               // 按前脚、后脚
+    const fat = fatigueOf(lerp(f[F.stam], g[F.stam], a)), hurt = f[F.stun] > 60;
+    crouch += 0.012 * (1 + Math.sin(tf * 0.55 + k * 1.7));             // 脚下一直在弹
+    if (hurt) roll += 0.05 * Math.sin(tf * 0.6 + k);                   // 被打晃了站不稳
+    // 防守动作
+    const D = mo.defs[mo.dptr[t]];
+    let def = null;
+    if (D && !mode.noDef && tf >= D.t0 && tf < D.t2) {
+      const e = tf < D.ta ? easeOut((tf - D.t0) / (D.ta - D.t0)) : tf < D.t1 ? 1 : 1 - ease((tf - D.t1) / (D.t2 - D.t1));
+      if (D.m === M.SLIP) { roll += 0.3 * e * D.side; crouch += 0.09 * e; pitch += 0.06 * e; headL += 0.05 * e * D.side; }   // 头偏出来拳的线 25 厘米、往下沉十来厘米
+      else if (D.m === M.DUCK) { crouch += 0.22 * e; pitch += 0.25 * e; pelF -= 0.12 * e; }              // 头往下 26 厘米，勾拳从上面过去
+      else if (D.m === M.PULL) { pitch -= 0.42 * e; pelF -= 0.05 * e; }                                  // 头往后 27 厘米（模拟 0.25 米）
+      def = { D, e };
+    }
+    // 自己的拳：预备时转肩、移重心、屈膝；打出时胯带肩，后脚跟拧起来；要够到落点就往前送一步
+    for (let h = 0; h < 2; h++) {
+      const E = activePunch(mo, h, tf);
+      if (!E) continue;
+      const lead = h === 0, sideH = lead ? ls : -ls;
+      if (E.feint) { const env = Math.sin(Math.PI * clamp((tf - E.t0) / (E.t2 - E.t0), 0, 1)); yaw += (lead ? ls * 0.15 : -ls * 0.3) * env; pitch += 0.04 * env; continue; }
+      const { ld, dr, lg } = punchDrive(E, tf);
+      if (E.typ === 0) {
+        if (lead) { yaw += ls * 0.3 * dr; pitch += 0.05 * dr; }                                     // 刺拳：前肩送出去
+        else { yaw += ls * 0.08 * ld - ls * 1.2 * dr; heel[1] += 0.02 * ld + 0.06 * dr; fyaw[1] += ls * 0.6 * dr; pitch += 0.08 * dr; }   // 后手直拳：拧后脚、转胯、后肩送到前面
+      } else if (E.typ === 1) {
+        if (lead) { yaw += ls * (0.15 * ld - 0.75 * dr); heel[0] += 0.04 * dr; fyaw[0] -= ls * 0.5 * dr; pelL += sideH * 0.03 * ld; roll -= sideH * 0.06 * dr; }   // 前手勾拳：重心压到前脚，前脚拧转
+        else { yaw += ls * (0.1 * ld - 1.1 * dr); heel[1] += 0.05 * dr; fyaw[1] += ls * 0.6 * dr; }
+      } else {
+        crouch += 0.1 * ld - 0.03 * dr; roll += sideH * 0.12 * ld;                                  // 上勾拳：先往出拳那侧沉下去，再蹬地往上
+        yaw -= ls * (lead ? 0.25 : 0.85) * dr; if (!lead) heel[1] += 0.05 * dr;
+      }
+      if (E.tgt === 1) { const lv = Math.max(ld, dr); crouch += 0.1 * lv; pitch += 0.1 * lv; }      // 打身体：屈膝降重心
+      const Lg = mode.lunge && mode.lunge.E === E ? mode.lunge.L : mode.core ? 0 : E.lunge;
+      // 上步主要靠整个人往前移、少靠前倾（前倾多了肩膀往下掉，离落点反而远）
+      if (Lg) { pelF += 0.7 * Lg * lg; lungePitch += Math.asin(clamp(0.3 * Lg / R.spine, -0.5, 0.8)) * lg; slide += (lead ? 0.85 : 0.5) * Math.max(0, Lg) * lg; }
+      if (Lg > 0 && E.tgt === 1) pelL += sideH * 0.6 * Lg * lg;       // 打身体上步：斜着往出拳那侧上，头从对方身体外侧过去
+    }
+    // 扑抱、缠抱
+    const C = mo.clinches[mo.cptr[t]];
+    if (C && tf >= C.t0 && tf < C.t2) {
+      const e = tf < C.t1 ? ease((tf - C.t0) / (C.t1 - C.t0)) : 1 - ease((tf - C.t1) / (C.t2 - C.t1));
+      pitch += 0.3 * e; pelF += 0.12 * e;
+    }
+    const cw = clinchWeight(mo, tf);                       // 抱住的程度：抱上去用半帧，分开后 4 帧回到站姿
+    if (cw > 0) { pitch = lerp(pitch, Math.max(pitch, 0.38), cw); headL += ls * 0.12 * cw; crouch += 0.04 * cw; }
+    // 挨打：直拳把头打得往后仰，勾拳把脸打偏，上勾拳把下巴顶起来；身体拳打得弯腰，肝区往右侧弯。被挡住只是护手被压回来
+    for (let i = mo.hptr[t]; i >= 0; i--) {
+      const H = mo.hits[i], dt = tf - H.t;
+      if (dt < 0) continue;
+      if (dt > 12) break;
+      const E = H.E, imp = (dt / 1.3) * Math.exp(1 - dt / 1.3), A = clamp((E.dmg || 4) / 7, 0.35, 1.6) * (E.ctr ? 1.25 : 1) * (E.glance ? 0.5 : 1);
+      if (E.oc === 2) { pitch -= 0.04 * A * imp; guardPush += 0.05 * A * imp; continue; }
+      if (dt < 1.5 && E.tgt === 0) flash = true;
+      const zone = zoneOf(E);
+      if (E.tgt === 0) {
+        if (E.typ === 1) { headL -= H.side * 0.07 * A * imp; headYaw -= H.side * 0.5 * A * imp; roll -= H.side * 0.07 * A * imp; }
+        else if (E.typ === 2) { headZ += 0.03 * A * imp; pitch -= 0.06 * A * imp; headF -= 0.03 * A * imp; }
+        else { headF -= (zone === 0 ? 0.09 : 0.07) * A * imp; pitch -= 0.1 * A * imp; }
+      } else if (zone === 3) { roll -= 0.18 * A * imp; pitch += 0.15 * A * imp; crouch += 0.05 * A * imp; }
+      else { pitch += 0.25 * A * imp; crouch += 0.06 * A * imp; }
+    }
+    // 肝区击倒的延迟里弯着腰、捂着右肋；心窝挨了一下喘不上气
+    const lv = lerp(mo.liver[t], mo.liver[t2], a), wd = lerp(mo.winded[t], mo.winded[t2], a);
+    pitch += 0.38 * lv + 0.12 * wd; crouch += 0.2 * lv; roll -= 0.15 * lv;
+    // 上身往前折得多，胯就往后坐（重心留在两脚之间），不会一头扎进对手怀里；往前送步的前倾不算
+    pelF -= 0.35 * Math.max(0, pitch - 0.3);
+    pitch += lungePitch;
+    // 骨架
+    const pel = W(pelF, pelL, R.hipZ - crouch);
+    const sp = Wv(Math.sin(pitch) * Math.cos(roll), Math.sin(roll), Math.cos(pitch) * Math.cos(roll));     // 脊柱：先前倾再侧弯
+    const chest = add3(pel, mul3(sp, R.spine));
+    const shAx = Wv(Math.sin(yaw), Math.cos(yaw), -Math.sin(roll) * Math.cos(yaw));                          // 左肩的方向
+    const shL = add3(chest, mul3(shAx, R.shHalf)), shR = sub3(chest, mul3(shAx, R.shHalf));
+    const lift = 0.04 * ((post === 3 ? 1 - pu : 0) + (post2 === 3 && post !== 3 ? pu : 0));                  // 肩卷：前肩抬起来护下巴
+    (ls > 0 ? shL : shR)[2] += lift * (1 - su); (ls > 0 ? shR : shL)[2] += lift * su;                          // 换站架时换到新的前肩
+    const hy = 0.55 * yaw, hipAx = Wv(Math.sin(hy), Math.cos(hy), 0);
+    const hipL = add3(pel, mul3(hipAx, R.hipHalf)), hipR = sub3(pel, mul3(hipAx, R.hipHalf));
+    const head = add3(add3(chest, mul3(sp, R.neckL + R.headR * 0.95)), Wv(headF, headL, headZ));
+    const [ox, oy] = placeAt(rep, tf, 1 - k);
+    const faceAng = th + clamp(wrapPi(Math.atan2(oy - y, ox - x) - th), -1.1, 1.1) + headYaw;               // 眼睛盯着对手
+    // 脚：钉在台面上的位置，加上出拳时前脚往前滑、脚跟拧起来
+    const fs = feetAt(rep, k, tf), fwd = Wv(1, 0, 0), ankles = [], knees = [], footYaw = [], heels = [], ankT = [];
+    for (let i = 0; i < 2; i++) {
+      const role = (i === 0) === (ls > 0) ? 0 : 1, q = fs[i], sl = role === 0 ? slide : 0.15 * slide, yawF = q.yaw + fyaw[role];
+      ankT.push([q.p[0] + fwd[0] * sl, q.p[1] + fwd[1] * sl, R.ankle + q.lift + heel[role]]);
+      const kn = ik3(i === 0 ? hipL : hipR, ankT[i], R.thigh, R.shin, [Math.cos(yawF), Math.sin(yawF), 0.25], fwd);
+      ankles.push(kn.G); knees.push(kn.E); footYaw.push(yawF); heels.push(heel[role]);
+    }
+    // 护手：跟着头走；累了手往下掉，被打晃了也掉；贴身时收到脸颊两边（贴身防守的"耳罩"，两个人的拳套不会正对着搅在一起）
+    const tuck = clamp((Math.hypot(ox - x, oy - y) - 0.55) / 0.45, 0.45, 1);
+    const shRole = ls > 0 ? [shL, shR] : [shR, shL], reach = (R.ua + R.fa) * 0.88;
+    const place = (v, h) => {
+      let G = outside(outside(add3(head, Wv(v[0] * tuck - 0.03 * fat - guardPush,
+        v[1] + (Math.sign(v[1]) || (h === 0 ? ls : -ls)) * 0.12 * (1 - tuck), v[2] - 0.12 * fat - (hurt ? 0.04 : 0))),
+        head, head, R.headR + R.glove * 0.75), pel, chest, R.chestD + R.glove * 0.8);                       // 拳套贴着脸、贴着肚子，不陷进去
+      const S = shRole[h], v2 = sub3(G, S), d = len3(v2);
+      if (d > reach) G = add3(S, mul3(v2, reach / d));                                                    // 转腰把肩膀带走时，手跟着收回来，胳膊不拉直
+      return outside(G, S, S, 0.18);                                                                      // 胳膊折不到拳套贴着自己肩膀：从肩膀往外推开
+    };
+    const guard = [0, 1].map(h => polar(shRole[h], polar(shRole[h], place(gF[0].gl[h], h), place(gF[1].gl[h], h), pu),
+      polar(shRole[h], place(gG[0].gl[h], h), place(gG[1].gl[h], h), pu), a));
+    return { k, R, x, y, th, c, s, ls, W, Wv, pel, chest, shL, shR, hipL, hipR, head, faceAng, ankles, knees, footYaw, heels, ankT,
+      guard, sh: shRole, def, post, flash, lv, cw,
+      face: { hurt, tilt: f[F.tilt], sweat: f[F.stam] < 0.3, jaw: R.jaw } };
+  }
+
+  // 胳膊：护手位置，或者正在打的那一拳的轨迹；拍挡、缠抱、捂肋另算。肘按动作往不同方向弯：护手时往下，勾拳往外抬平
+  function armsOf(rep, tf, k, J, Jo) {
+    if (J.armsDone) return J;
+    const mo = rep._mo[k], R = J.R, f = rep.frames[clamp(Math.floor(tf), 0, rep.frames.length - 1)].f[k], fw = J.Wv(1, 0, 0);
+    J.gloves = []; J.elbows = []; J.gloveT = [];          // gloveT：拳套该在的位置（胳膊够不着时和 gloves 不一样，核对用）
+    for (let h = 0; h < 2; h++) {
+      const S = J.sh[h], side = h === 0 ? J.ls : -J.ls, out = J.Wv(0, side, 0);
+      // 护手时肘往下、略往外（往后的分量在胳膊往前上方折的时候会投影成往上，把肘顶到前上方去，所以不加）
+      let G = J.guard[h], pole = norm3(add3([0, 0, -1], mul3(out, 0.3)));
+      const E = activePunch(mo, h, tf), E2 = activePunch(mo, 1 - h, tf);
+      // 组合拳：另一只手开始发力（转胯把这一侧的肩膀带走）时，这只手跟着加快收回来，不被拉直
+      const hurry = E2 && !E2.feint && E2.t0 > (E ? E.t0 : -1e9) ? Math.min(1, punchDrive(E2, tf).dr) : 0;     // 打空时多转的那一截不算
+      if (E) { const r = punchGlove(rep, k, E, tf, J, G, out, fw, hurry); G = r.G; pole = norm3(lerp3(pole, r.pole, r.w)); }
+      if (J.def && J.def.D.m === M.PARRY && J.def.D.hand === h) G = parryGlove(rep, k, J.def, tf, J, G, fw);
+      for (const Eo of punchesNear(rep._mo[1 - k], tf, 3)) {
+        const w = ease(clamp(1 - Math.abs(tf - Eo.t1) / 3, 0, 1));
+        if (Eo.oc === 2 && Eo.tgt === 1 && side === (Eo.left ? -1 : 1)) {        // 身体拳被挡：那一侧的小臂、手肘压下来盖住落点
+          const K = targetOf(rep, 1 - k, Eo);
+          G = lerp3(G, add3(K.C, [0, 0, 0.22]), w); pole = norm3(lerp3(pole, norm3(sub3(K.C, S)), w));
+        } else if (Eo.oc === 1 && Eo.tgt === 0) {                                // 头部拳打中：挡在拳路上的护手让开（默认护架没挡住），拳从空当里进去
+          const K = targetOf(rep, 1 - k, Eo), away = sub3(G, K.C), d = len3(away);
+          if (d < 0.2) G = add3(G, mul3(add3(mul3(norm3(sub3(away, mul3(K.inDir, dot3(away, K.inDir)))), 0.12), [0, 0, -0.08]), w * (1 - d / 0.2)));
+        }
+      }
+      if (J.cw > 0 && Jo) {                          // 缠抱：手搭到对方同一侧的肩背上（够得着的地方），抱上去、分开都是渐变的
+        const sh = dot3(sub3(Jo.shL, J.chest), out) > dot3(sub3(Jo.shR, J.chest), out) ? Jo.shL : Jo.shR;
+        let W2 = add3(add3(sh, mul3(fw, 0.05)), [0, 0, -0.05]);
+        const v = sub3(W2, S), d = len3(v), m = (R.ua + R.fa) * 0.95;
+        if (d > m) W2 = add3(S, mul3(v, m / d));
+        G = lerp3(G, W2, J.cw); pole = norm3(lerp3(pole, norm3(add3(out, [0, 0, -0.5])), J.cw));
+      }
+      if (J.lv > 0 && side < 0) {                    // 肝区击倒的延迟里右手捂着右肋，跟着弯腰的程度过去
+        G = lerp3(G, add3(lerp3(J.pel, J.chest, 0.35), J.Wv(0.1, -0.16, 0)), J.lv); pole = norm3(lerp3(pole, norm3(add3([0, 0, -1], out)), J.lv));
+      }
+      // 胳膊和"肘往下"差不多平行时的备用方向：手在肩膀下面（低手位）肘往外，手在肩膀上面（举到额前）肘往前下。
+      // 护手从腹前抬到额前、拳套擦着肩膀过去的那一下，肘一直在身前，不会甩到外面再甩回来
+      const uz = (G[2] - S[2]) / (len3(sub3(G, S)) || 1);
+      const q = ik3(S, G, R.ua, R.fa, pole, add3(mul3(out, clamp(-uz * 2, 0, 1) + 0.1), mul3(fw, clamp(uz * 2, 0, 1))));
+      J.gloves[h] = q.G; J.elbows[h] = q.E; J.gloveT[h] = G;
+    }
+    return J;
+  }
+  function punchPath(E, A, T, u, out, fw) {
+    if (E.typ === 0) return lerp3(A, T, u);                                    // 直拳：直线
+    const m = lerp3(A, T, 0.5), L = len3(sub3(T, A));
+    const C = E.typ === 1 ? add3(add3(m, mul3(out, 0.3 * L + 0.05)), add3([0, 0, 0.04], mul3(fw, -0.05)))   // 勾拳：从外侧横着绕进来
+      : add3(m, add3([0, 0, -0.22], mul3(fw, -0.08)));                          // 上勾拳：从下面兜上来
+    return bez3(A, C, T, u);
+  }
+  function punchGlove(rep, k, E, tf, J, Gg, out, fw, hurry = 0) {
+    const pole = E.typ === 1 ? norm3(add3(out, [0, 0, 0.35])) : E.typ === 2 ? norm3(add3([0, 0, -1], mul3(fw, -0.3))) : norm3(add3([0, 0, -1], mul3(out, 0.25)));
+    if (E.feint) return { G: add3(Gg, mul3(fw, 0.09 * Math.sin(Math.PI * clamp((tf - E.t0) / (E.t2 - E.t0), 0, 1)))), pole, w: 0 };
+    // 预备：勾拳往外引、上勾拳往下沉，直拳几乎不动（"别闪第一记刺拳"）
+    const ld = ease(clamp((tf - E.t0) / Math.max(0.5, E.tb - E.t0), 0, 1));
+    const load = E.typ === 1 ? add3(mul3(out, 0.04), mul3(fw, -0.03)) : E.typ === 2 ? add3([0, 0, -0.09], mul3(fw, -0.03)) : [0, 0, -0.015];
+    const A = add3(Gg, mul3(load, ld)), K = targetOf(rep, k, E), end = E.cut ?? E.t1;
+    const prog = tt => Math.pow(clamp((tt - E.ta) / Math.max(0.5, E.t1 - E.ta), 0, 1), 1.6);     // 越打越快，到落点时最快
+    if (tf < E.ta) return { G: A, pole, w: 0.3 * ld };
+    if (tf < end) return { G: punchPath(E, A, K.T, prog(tf), out, fw), pole, w: Math.min(1, 0.3 + prog(tf)) };
+    // 打到以后：打中的顶进去一点再收；被挡的弹回来；被拍开的往外偏；打空、被躲开的顺势多送一截
+    const r1 = clamp((tf - end) / 1.2, 0, 1);
+    let P0;
+    if (E.cut !== undefined) P0 = punchPath(E, A, K.T, prog(E.cut), out, fw);
+    else if (E.oc === 1) P0 = add3(K.T, mul3(K.inDir, 0.03 * Math.sin(Math.PI * r1)));
+    else if (E.oc === 2) P0 = K.T;
+    else if (E.oc === 3 && E.ev === M.PARRY) P0 = add3(K.T, mul3(add3(mul3(K.deflect, 0.16), mul3(K.inDir, 0.04)), easeOut(r1)));
+    else P0 = add3(K.T, mul3(K.inDir, Math.min(E.typ === 1 ? 0.14 : 0.08, K.gap ?? 1) * easeOut(clamp((tf - end) / 1.5, 0, 1))));   // 射程不够的，送不过差的那一截
+    const rr = Math.max(retract(E, tf), hurry);
+    return { G: lerp3(P0, Gg, rr), pole, w: Math.min(1, 0.3 + prog(end)) * (1 - rr) };      // 肘的方向从打到（或被打断）那一刻接着往回收
+  }
+  // 拍挡：来拳那一侧的手迎上去，拳到的那一下在脸前二十来厘米处碰上，把拳拍向外侧
+  function parryGlove(rep, k, def, tf, J, Gg, fw) {
+    const { D, e } = def, E = D.inc;
+    let G = add3(Gg, add3(mul3(fw, 0.12 * e), J.Wv(0, -0.04 * (D.hand === 0 ? J.ls : -J.ls) * e, 0)));
+    if (E && E.oc === 3 && E.ev === M.PARRY) {
+      const K = targetOf(rep, 1 - k, E), w = ease(clamp(1 - Math.abs(tf - E.t1) / 1.5, 0, 1));
+      const push = tf > E.t1 ? mul3(K.deflect, 0.12 * easeOut(clamp((tf - E.t1) / 1.2, 0, 1))) : [0, 0, 0];
+      G = lerp3(G, add3(add3(K.C, mul3(K.inDir, -0.03)), push), w);
+    }
+    return G;
+  }
+
+  // 落点：回放里记着就用记着的；旧回放没记，按这一拳最常见的落点（把人打倒的头部拳算下颌，左勾拳打身体算肝区）
+  function zoneOf(E) {
+    if (E.zone !== undefined && E.zone >= 0) return E.zone;
+    if (E.tgt === 0) return E.kd || E.typ === 2 ? 0 : E.typ === 1 ? 1 : 2;
+    return E.typ === 1 ? (E.left ? 3 : 5) : 4;
+  }
+  // 模拟里这一拳够得着的中心距（和 boxing.py 的 reach_lim 同一个算法）
+  function reachLim(rep, k, E) {
+    const fr = rep.frames, t = clamp(E.t1, 0, fr.length - 1), f = fr[t].f[k], o = fr[t].f[1 - k], b = rep.bodies[k];
+    const w = (SIM.REACH_W || [1, 0.5, 0.4])[E.typ];
+    let arm = SIM.RNG[E.p] * (w * b.reach + (1 - w) * 0.75);
+    if (E.typ === 0) arm *= (SIM.POSTURE_RANGE || [1, 1.05, 0.95, 1])[f[F.post]];
+    if ((E.p === 2 || E.p === 3) && f[F.st] !== o[F.st]) arm *= SIM.OPEN_CROSS_RANGE || 1.05;
+    return SIM.BODY_R + SIM.SHOULDER + arm;
+  }
+  // 拳和人碰在哪：C 是接触点，T 是那一刻拳套的中心，inDir 是来拳方向，side 是落点在对手身上的哪一侧（对着出拳那只手）
+  function contactOf(rep, k, E, core) {
+    const d = 1 - k, t1 = E.t1;
+    // 被躲开：打的是头原来的位置（不算闪躲）；打空：按"对手站在射程边上时拳落在哪"往回退那一截，所以也不算对手的闪躲和前冲
+    const Ja = bodyPose(rep, t1, k, { core: true, noDown: true }), Jd = bodyPose(rep, t1, d, { core: core || E.oc === 4, noDef: E.oc >= 3, noDown: true });
+    const Ra = rigOf(rep, k), Rd = rigOf(rep, d), r = Rd.headR, S = Ja.sh[E.hand];
+    const latA = Ja.Wv(0, E.hand === 0 ? Ja.ls : -Ja.ls, 0), hc = Jd.head;
+    const toA = norm3([S[0] - hc[0], S[1] - hc[1], 0]);
+    const sv = norm3(sub3(latA, mul3(toA, dot3(latA, toA))));
+    const at = (o, a, b, z) => add3(o, add3(add3(mul3(toA, a), mul3(sv, b)), [0, 0, z]));
+    const zone = zoneOf(E);
+    let C, short;
+    if (E.tgt === 0) {
+      C = zone === 0 ? (E.typ === 2 ? at(hc, r * 0.45, 0, -r * 0.9) : E.typ === 1 ? at(hc, r * 0.45, r * 0.7, -r * 0.55) : at(hc, r * 0.8, 0, -r * 0.55))   // 下颌
+        : zone === 1 ? at(hc, r * 0.25, r * 0.92, r * 0.1)                    // 头侧（太阳穴）
+        : at(hc, r * 0.95, 0, r * 0.1);                                        // 额头面门
+    } else {
+      const mid = w => lerp3(Jd.pel, Jd.chest, w);
+      C = zone === 3 ? add3(at(mid(0.42), 0.05, 0, 0), Jd.Wv(0, -(Rd.hipHalf + 0.07), 0))    // 肝区：右侧下肋
+        : zone === 4 ? at(mid(0.62), Rd.chestD + 0.01, 0, 0)                   // 心窝
+        : at(mid(0.45), Rd.waistD + 0.02, 0.1, 0);                             // 肋部、腹部
+    }
+    if (E.oc === 2) {
+      // 被挡：头部拳挡在离落点最近的那只护手上（正在出拳的那只手护不了）；身体拳挡在落点前面的小臂、手肘上；肩卷用前肩卸掉
+      if (E.blk === 3 && Jd.post === 3 && E.tgt === 0) C = add3(Jd.sh[0], add3(mul3(toA, 0.07), [0, 0, 0.03]));
+      else if (E.tgt === 1) C = add3(C, mul3(toA, 0.07));
+      else {
+        const om = rep._mo[d], free = [0, 1].filter(h => !activePunch(om, h, t1)), hs = free.length ? free : [0, 1];
+        const h = hs.reduce((b, q) => len3(sub3(Jd.guard[q], C)) < len3(sub3(Jd.guard[b], C)) ? q : b, hs[0]);
+        C = add3(Jd.guard[h], mul3(toA, Rd.glove));
+      }
+    } else if (E.oc === 4) {
+      // 打空：朝向偏了，拳顺着能打的最边上伸出去；射程不够，停在半空差那么一截；对手倒地、被抱住时从旁边过去
+      // 差多少按画面上拳到的那一帧的两人位置算（模拟用的是前一帧；对手那一帧在轴转、横移时差得多，拳会远到送步也补不上）
+      const fr = rep.frames, a0 = fr[Math.max(0, t1 - 1)].f[k], a1 = fr[t1].f[k], d1 = fr[t1].f[d];
+      const gap = Math.hypot(d1[F.x] - a1[F.x], d1[F.y] - a1[F.y]) - reachLim(rep, k, E), d0 = d1;
+      const off = wrapPi(Math.atan2(d0[F.y] - a0[F.y], d0[F.x] - a0[F.x]) - a0[F.th]), cone = E.typ === 1 ? SIM.ANG_HOOK || 0.785 : SIM.ANG_STRAIGHT || 0.524;
+      if (Math.abs(off) > cone) {
+        const ang = a0[F.th] + Math.sign(off) * cone, hd = Math.min(Math.hypot(C[0] - S[0], C[1] - S[1]), Ra.armLen * 0.8);   // 伸到胳膊能伸的地方，不用上步
+        C = [S[0] + Math.cos(ang) * hd, S[1] + Math.sin(ang) * hd, C[2]];
+      } else if (gap > 0) { C = add3(C, mul3(toA, gap + 0.02)); short = gap; }
+      else C = add3(C, mul3(sv, 0.24));
+    } else if (E.oc === 3 && E.ev === M.PARRY) C = add3(C, mul3(toA, 0.22));       // 被拍开：在脸前二十来厘米处碰上
+    const toC = norm3(sub3(C, S)), inDir = E.typ === 1 ? norm3(add3(mul3(toC, 0.45), mul3(sv, -0.55))) : toC;
+    return { C, T: sub3(C, mul3(inDir, Ra.glove * 1.05)), inDir, side: sv, deflect: sv, zone, gap: short };
+  }
+  const targetOf = (rep, k, E) => E._K || (E._K = contactOf(rep, k, E, false));
+  // 要够到落点得往前送多少：胳膊伸直还差的那一截（满射程的拳约 20 厘米）
+  // 太近时反过来往后让、上身直起来，给胳膊留出打出去的空间（近身短拳）
+  function lungeFor(rep, k, E) {
+    if (E.feint || !E.oc) return 0;
+    const K = contactOf(rep, k, E, true), arm = rigOf(rep, k).armLen, rmin = arm * 0.4;
+    const rmax = arm * (E.typ === 0 ? 0.96 : E.typ === 1 ? (E.tgt === 1 ? 0.95 : 0.9) : 0.86);     // 打身体的勾拳胳膊开得更大（兜着打），比打头的伸得远
+    let L = 0;
+    for (let it = 0; it < 5; it++) {          // 送一步肩膀大约往前走同样的距离，按实际姿势再校几次
+      const Ja = bodyPose(rep, E.t1, k, { core: true, noDown: true, lunge: { E, L } }), D = sub3(K.T, Ja.sh[E.hand]), r = len3(D);
+      if (r < rmin - 0.005) { L = clamp(L - (rmin - r), -0.2, 0.45); continue; }
+      if (r <= rmax + 0.002) break;
+      const b = dot3(D, Ja.Wv(1, 0, 0)), disc = b * b - (r * r - rmax * rmax);
+      L = clamp(L + (disc >= 0 ? b - Math.sqrt(disc) : b), -0.2, 0.45);
+    }
+    return L;
+  }
+
+
+
+  // 倒地：从站姿过渡到躺在台上，0.6 秒（头部挨打往后倒，挨打的那一下头先甩出去；肝区击倒是跪下去、弯着腰）；站起来就倒过来放
+  function downPose(rep, tf, k, dAt, uAt) {
+    const tRef = uAt === null ? tf : uAt + 12;
+    const J0 = armsOf(rep, tRef, k, bodyPose(rep, tRef, k, { noDown: true }));
+    const knees = !!rep._mo[k].liver[Math.max(0, dAt - 1)];
+    const d = uAt === null ? clamp((tf - dAt) / 12, 0, 1) : 1 - clamp((tf - uAt) / 12, 0, 1);
+    return blendDown(J0, lyingPose(rep, k, dAt, J0, knees), d);
+  }
+  function lyingPose(rep, k, dAt, J0, knees) {
+    const R = J0.R, o = rep.frames[clamp(dAt, 0, rep.frames.length - 1)].f[1 - k], x = J0.x, y = J0.y, RING = SIM.RING;
+    const ang0 = Math.atan2(y - o[F.y], x - o[F.x]);
+    // 往背向对手的方向倒；背后是围绳就往侧面倒
+    const fits = ang => { const L = knees ? 0.7 : R.spine + 0.5; const hx = x + Math.cos(ang) * L, hy = y + Math.sin(ang) * L; return hx > 0.15 && hx < RING - 0.15 && hy > 0.15 && hy < RING - 0.15; };
+    const ang = [0, Math.PI / 2, -Math.PI / 2, Math.PI].map(q => ang0 + q).find(fits) ?? ang0;
+    const bx = Math.cos(ang), by = Math.sin(ang);
+    const V = (b, l, z) => [bx * b - by * l, by * b + bx * l, z], P = (b, l, z) => add3([x, y, 0], V(b, l, z));   // b：往倒下的方向，l：往倒下方向的左侧
+    if (!knees) {
+      // 仰面倒下：面朝对手时左手在 −l 一侧，仰面躺下左右不变
+      const sb = 0.15, cb = sb + R.spine;
+      return { pel: P(sb, 0, 0.13), chest: P(cb, 0, 0.15), head: P(cb + R.neckL + R.headR, 0, 0.13),
+        shL: P(cb, -R.shHalf, 0.13), shR: P(cb, R.shHalf, 0.13), hipL: P(sb, -R.hipHalf, 0.13), hipR: P(sb, R.hipHalf, 0.13),
+        knees: [P(-0.3, -0.16, 0.3), P(-0.25, 0.14, 0.26)], ankles: [P(-0.62, -0.2, 0.07), P(-0.58, 0.18, 0.07)],
+        elbows: [P(cb - 0.05, -0.36, 0.07), P(cb - 0.1, 0.35, 0.07)], gloves: [P(cb + 0.2, -0.5, 0.07), P(cb + 0.12, 0.52, 0.07)] };
+    }
+    // 跪下：膝盖着地，身子弯下去，左手撑地、右手捂着右肋（肝在右侧）
+    const pz = 0.42, chest = P(-0.05 - R.spine * 0.9, 0, pz + R.spine * 0.36);
+    return { pel: P(-0.05, 0, pz), chest, head: add3(chest, V(-0.16, 0, 0.02)), shL: add3(chest, V(0, -R.shHalf, 0)), shR: add3(chest, V(0, R.shHalf, 0)),
+      hipL: P(-0.05, -R.hipHalf, pz), hipR: P(-0.05, R.hipHalf, pz), knees: [P(-0.4, -0.13, 0.06), P(-0.38, 0.13, 0.06)], ankles: [P(0.05, -0.14, 0.06), P(0.07, 0.14, 0.06)],
+      elbows: [P(-0.62, -0.25, 0.3), P(-0.3, 0.26, 0.35)], gloves: [P(-0.82, -0.2, 0.07), P(-0.22, 0.17, 0.45)] };
+  }
+  function blendDown(J0, JL, d) {
+    const zf = ease(clamp(d * 1.3, 0, 1)), rf = ease(clamp((d - 0.2) / 0.8, 0, 1));
+    const mz = (a, b) => [lerp(a[0], b[0], rf), lerp(a[1], b[1], rf), lerp(a[2], b[2], zf)];          // 先腿软往下塌，再倒平
+    const anat = h => (h === 0) === (J0.ls > 0) ? 0 : 1;                                                  // 前后手 → 左右手
+    const J = { ...J0, armsDone: true, down: d, flash: false, face: { ...J0.face, hurt: true } };
+    for (const key of ['pel', 'chest', 'head', 'shL', 'shR', 'hipL', 'hipR']) J[key] = mz(J0[key], JL[key]);
+    J.ankles = [0, 1].map(i => lerp3(J0.ankles[i], JL.ankles[i], rf));
+    J.knees = [0, 1].map(i => mz(J0.knees[i], JL.knees[i]));
+    J.gloves = [0, 1].map(h => mz(J0.gloves[h], JL.gloves[anat(h)]));
+    J.elbows = [0, 1].map(h => mz(J0.elbows[h], JL.elbows[anat(h)]));
+    J.sh = J0.ls > 0 ? [J.shL, J.shR] : [J.shR, J.shL];
+    return J;
+  }
+
+  // ---------------------------------------------------------------- 画三维拳手：每段肢体投影到画面，两个人的所有部件按远近一起排序再画
+  // 一个人的各个部件，按画的先后排好：远侧胳膊 → 远侧腿 → 躯干 → 近侧腿 → 短裤 → 头 → 近侧胳膊。
+  // 同一个人两只拳套、头和拳套离镜头差不多远时，按远近排会一帧一变、来回闪；正对镜头时两只胳膊分在画面两边，远近侧换了也看不出来。
+  // 倒在地上时按远近排
+  function rigParts(c, cam, J, id) {
+    const L = look(id), R = J.R, ink = '#14161c', pj = p => cam.P(p[0], p[1], p[2]), dep = p => cam.W(p[0], p[1])[1];
+    const lw = Math.max(1.2, 0.012 * pj(J.pel)[2]), dsh = dep(J.shL) - dep(J.shR), farL = dsh > 0;      // 左半边离镜头远
+    const parts = [];
+    for (let i = 0; i < 2; i++) {
+      const hip = i ? J.hipR : J.hipL, kn = J.knees[i], an = J.ankles[i], far = (i === 0) === farL;
+      parts.push({ k: J.k, tag: far ? 2 : 4, id: `腿${i}`, d: (dep(hip) + dep(kn) + dep(an)) / 3, f: () => leg3(c, pj, hip, kn, an, J.footYaw[i], J.heels[i], R, L, far, ink, lw) });
+    }
+    parts.push({ k: J.k, tag: 3, id: '躯干', d: dep(lerp3(J.pel, J.chest, 0.5)), f: () => torso3(c, cam, J, L, ink, lw) });
+    parts.push({ k: J.k, tag: 5, id: '短裤', d: Math.min(dep(J.hipL), dep(J.hipR)) - 0.03, f: () => shorts3(c, cam, J, L, ink, lw) });
+    parts.push({ k: J.k, tag: 6, id: '头', d: dep(J.head) - 0.02, f: () => head3(c, cam, J, L, ink, lw) });
+    for (let h = 0; h < 2; h++) {
+      const S = J.sh[h], E = J.elbows[h], G = J.gloves[h], far = ((h === 0) === (J.ls > 0)) === farL;
+      // 上臂和小臂（连拳套）分开排：拳套绕到对方头后面时会被挡住
+      parts.push({ k: J.k, tag: far ? 0 : 7, id: `上臂${h}`, d: dep(lerp3(S, E, 0.5)), f: () => arm3(c, pj, [S, lerp3(S, E, 0.4), E], [1.15, 1, 0.68], R, L, far, ink, lw) });
+      parts.push({ k: J.k, tag: far ? 1 : 8, id: `小臂${h}`, d: dep(G) - 0.005, f: () => { arm3(c, pj, [E, lerp3(E, G, 0.35), G], [0.68, 0.74, 0.52], R, L, far, ink, lw); glove3(c, pj, E, G, R, L, far, ink, lw); } });
+    }
+    return J.down > 0.3 ? parts.sort((p, q) => q.d - p.d) : parts.sort((p, q) => p.tag - q.tag);
+  }
+  // 两个人的部件交错着画：每人自己的先后不变，两人之间看谁的下一个部件离镜头远就先画谁（拳套打到对方脸上、绕到对方头后面都对）
+  function drawOrder(cam, Js, ids, c) {
+    const [A, B] = Js.map((J, k) => rigParts(c, cam, J, ids[k])), out = [];
+    let i = 0, j = 0;
+    while (i < A.length || j < B.length) out.push(j >= B.length || (i < A.length && A[i].d >= B[j].d) ? A[i++] : B[j++]);
+    return out;
+  }
+  const scr2 = q => [q[0], q[1]];
+  function arm3(c, pj, pts, ws, R, L, far, ink, lw) {
+    const P = pts.map(pj);
+    limb(c, P.map(scr2), ws.map((m, i) => R.arm * m * P[i][2]), far ? shade(L.skin, -0.18) : L.skin, ink, lw);
+  }
+  function glove3(c, pj, E, G, R, L, far, ink, lw) {
+    const g = pj(G), e = pj(E), r = R.glove * g[2];
+    c.save(); c.translate(g[0], g[1]); c.rotate(Math.atan2(g[1] - e[1], g[0] - e[0]));
+    c.fillStyle = far ? shade(L.glove, -0.22) : L.glove; c.strokeStyle = ink; c.lineWidth = lw;
+    c.beginPath(); c.ellipse(0, 0, r * 1.12, r, 0, 0, Math.PI * 2); c.fill(); c.stroke();
+    c.strokeStyle = far ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.32)'; c.lineWidth = lw * 1.3;      // 皮面高光
+    c.beginPath(); c.ellipse(r * 0.1, -r * 0.1, r * 0.72, r * 0.58, 0, -Math.PI * 0.85, -Math.PI * 0.35); c.stroke();
+    c.fillStyle = L.cuff; c.beginPath(); c.ellipse(-r * 0.82, 0, r * 0.32, r * 0.72, 0, 0, Math.PI * 2); c.fill();
+    c.restore();
+  }
+  function leg3(c, pj, hip, kn, an, yaw, heel, R, L, far, ink, lw) {
+    const P = [hip, lerp3(hip, kn, 0.4), kn, lerp3(kn, an, 0.3), an].map(pj), w = R.legW;
+    limb(c, P.map(scr2), [1, 0.95, 0.62, 0.7, 0.42].map((m, i) => w * m * P[i][2]), far ? shade(L.skin, -0.18) : L.skin, ink, lw);   // 大腿 → 膝盖 → 小腿肚 → 脚踝
+    const s1 = pj(lerp3(kn, an, 0.72));
+    limb(c, [scr2(s1), scr2(P[4])], [w * 0.58 * s1[2], w * 0.5 * P[4][2]], far ? shade(L.sock, -0.2) : L.sock, ink, lw);
+    // 鞋：沿脚尖方向；脚跟拧起来时后半截离地
+    const lift = an[2] - R.ankle - heel, dx = Math.cos(yaw), dy = Math.sin(yaw);
+    const toe = pj([an[0] + dx * 0.13, an[1] + dy * 0.13, 0.035 + lift]), hl = pj([an[0] - dx * 0.05, an[1] - dy * 0.05, 0.035 + lift + heel * 1.2]);
+    c.fillStyle = far ? shade(L.shoe, -0.25) : L.shoe; c.strokeStyle = ink; c.lineWidth = lw;
+    c.beginPath(); c.ellipse((toe[0] + hl[0]) / 2, (toe[1] + hl[1]) / 2, Math.hypot(toe[0] - hl[0], toe[1] - hl[1]) / 2 + 0.035 * toe[2], 0.045 * toe[2],
+      Math.atan2(toe[1] - hl[1], toe[0] - hl[0]), 0, Math.PI * 2); c.fill(); c.stroke();
+  }
+  // 躯干：宽度 = 肩线（腰线）和胸厚在画面上横着的投影，侧身对镜头时窄、正对时宽
+  function torsoWidths(cam, J) {
+    const pj = p => cam.P(p[0], p[1], p[2]), R = J.R;
+    const hpx = (p, v) => Math.abs(pj(add3(p, mul3(v, 0.1)))[0] - pj(p)[0]) / 0.1;
+    const shAx = norm3(sub3(J.shL, J.shR)), fwT = norm3([shAx[1], -shAx[0], 0]);
+    const hipAx = norm3(sub3(J.hipL, J.hipR)), fwH = norm3([hipAx[1], -hipAx[0], 0]);
+    return { pj, shAx, fwT, hipAx, fwH, sh: p => 2 * (hpx(p, shAx) * R.shHalf * 0.85 + hpx(p, fwT) * R.chestD), hip: (p, e) => 2 * (hpx(p, hipAx) * (R.hipHalf + e) + hpx(p, fwH) * R.waistD) };
+  }
+  // 沿脊柱的一串点和宽度画成一个平滑的轮廓（腰细、胸宽，肩线是一道缓弧），比一串圆接起来干净
+  function smoothBody(c, pts, ws, fill, ink, lw) {
+    const n = pts.length, Lt = [], Rt = [];
+    let dx = 0, dy = -1;
+    for (let i = 0; i < n; i++) {
+      const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)], d = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      dx = (b[0] - a[0]) / d; dy = (b[1] - a[1]) / d;
+      Lt.push([pts[i][0] - dy * ws[i] / 2, pts[i][1] + dx * ws[i] / 2]); Rt.push([pts[i][0] + dy * ws[i] / 2, pts[i][1] - dx * ws[i] / 2]);
+    }
+    const mid = (p, q) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], top = pts[n - 1], cap = [top[0] + dx * ws[n - 1] * 0.22, top[1] + dy * ws[n - 1] * 0.22];
+    c.fillStyle = fill; c.strokeStyle = ink; c.lineWidth = lw; c.lineJoin = 'round';
+    c.beginPath(); c.moveTo(Lt[0][0], Lt[0][1]);
+    for (let i = 1; i < n - 1; i++) { const m = mid(Lt[i], Lt[i + 1]); c.quadraticCurveTo(Lt[i][0], Lt[i][1], m[0], m[1]); }
+    c.lineTo(Lt[n - 1][0], Lt[n - 1][1]); c.quadraticCurveTo(cap[0], cap[1], Rt[n - 1][0], Rt[n - 1][1]);
+    for (let i = n - 2; i > 0; i--) { const m = mid(Rt[i], Rt[i - 1]); c.quadraticCurveTo(Rt[i][0], Rt[i][1], m[0], m[1]); }
+    c.lineTo(Rt[0][0], Rt[0][1]); c.closePath(); c.fill(); c.stroke();
+  }
+  function torso3(c, cam, J, L, ink, lw) {
+    const T = torsoWidths(cam, J), pts = [add3(J.pel, [0, 0, 0.02]), lerp3(J.pel, J.chest, 0.45), lerp3(J.pel, J.chest, 0.8), lerp3(J.pel, J.chest, 0.97)];
+    smoothBody(c, pts.map(p => scr2(T.pj(p))), [T.hip(pts[0], 0.07), T.hip(pts[1], 0.05), T.sh(pts[2]) * 1.02, T.sh(pts[3]) * 0.96], L.skin, ink, lw);
+    // 胸肌、腹肌线：胸口朝着镜头时才看得到，越壮越明显
+    const front = -(cam.W(J.chest[0] + T.fwT[0], J.chest[1] + T.fwT[1])[1] - cam.W(J.chest[0], J.chest[1])[1]);
+    if (front > 0.2 && !J.down) {
+      const R = J.R, a = T.pj(add3(lerp3(J.pel, J.chest, 0.82), mul3(T.fwT, R.chestD))), b = T.pj(add3(lerp3(J.pel, J.chest, 0.3), mul3(T.fwH, R.waistD)));
+      c.strokeStyle = `rgba(0,0,0,${(0.05 + 0.07 * R.mus) * front})`; c.lineWidth = lw;
+      c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke();
+    }
+  }
+  function shorts3(c, cam, J, L, ink, lw) {
+    const T = torsoWidths(cam, J), A = T.pj(add3(J.pel, [0, 0, 0.07])), B = T.pj(add3(J.pel, [0, 0, -0.17]));
+    const w = T.hip(J.pel, 0.075) * Math.max(1, J.R.legW / 0.13);
+    c.fillStyle = L.trunk; c.strokeStyle = ink; c.lineWidth = lw;
+    if (J.down > 0.4) { c.beginPath(); c.ellipse(A[0], (A[1] + B[1]) / 2, w * 0.6, Math.abs(B[1] - A[1]) / 2 + 0.06 * A[2], 0, 0, Math.PI * 2); c.fill(); c.stroke(); return; }
+    c.beginPath(); c.moveTo(A[0] - w / 2, A[1]); c.lineTo(A[0] + w / 2, A[1]); c.lineTo(B[0] + w * 0.57, B[1]); c.lineTo(B[0] - w * 0.57, B[1]); c.closePath(); c.fill(); c.stroke();
+    c.fillStyle = L.stripe ? shade(L.trunk, -0.35) : L.trunk2; c.fillRect(A[0] - w / 2, A[1], w, 0.035 * A[2]);
+    if (L.stripe) {                 // 短裤外侧的竖条（立绘里的紫条 / 黑金条），画在朝镜头的那条腿外侧
+      const near = cam.W(J.hipL[0], J.hipL[1])[1] < cam.W(J.hipR[0], J.hipR[1])[1] ? J.hipL : J.hipR, sg = Math.sign(T.pj(near)[0] - A[0]) || 1;
+      c.fillStyle = L.trunk2; c.beginPath();
+      c.moveTo(A[0] + sg * w * 0.28, A[1] + 0.035 * A[2]); c.lineTo(A[0] + sg * w * 0.42, A[1] + 0.035 * A[2]);
+      c.lineTo(B[0] + sg * w * 0.5, B[1]); c.lineTo(B[0] + sg * w * 0.34, B[1]); c.closePath(); c.fill();
+      if (L.trim) { c.strokeStyle = L.trim; c.lineWidth = lw * 0.8; c.beginPath(); c.moveTo(A[0] + sg * w * 0.28, A[1]); c.lineTo(B[0] + sg * w * 0.34, B[1]); c.stroke(); }
+    }
+  }
+  function head3(c, cam, J, L, ink, lw) {
+    const R = J.R, pj = p => cam.P(p[0], p[1], p[2]), hp = pj(J.head);
+    const nb = pj(lerp3(J.chest, J.head, 0.12)), nt = pj(lerp3(J.chest, J.head, 0.62));                  // 脖子：抗击打越好越粗
+    limb(c, [scr2(nb), scr2(nt)], [R.neckW * 1.2 * nb[2], R.neckW * nt[2]], shade(L.skin, -0.06), ink, lw);
+    const q0 = cam.W(J.head[0], J.head[1]), q1 = cam.W(J.head[0] + Math.cos(J.faceAng), J.head[1] + Math.sin(J.faceAng));
+    drawHead3(c, hp[0], hp[1], R.headR * hp[2], Math.atan2(q1[1] - q0[1], q1[0] - q0[0]), L, J.face, lw, J.flash);
+  }
+
+  // 打击点：火花画在落点上（干净打中黄、反击红、擦到的小一号），被挡是一圈格挡的闷响，被拍开是一下白光，被躲开、打空是一道拳风
+  function drawImpacts(c, rep, tf, cam, opts) {
+    for (let k = 0; k < 2; k++) {
+      const list = rep._mo[k].punches;
+      for (let i = list.length - 1; i >= 0; i--) {
+        const E = list[i];
+        if (!E.oc) continue;
+        const age = tf - E.t1;
+        if (age < 0) continue;
+        if (age > 12) break;
+        const K = targetOf(rep, k, E), [px, py, sc] = cam.P(K.C[0], K.C[1], K.C[2]);
+        c.save(); c.globalAlpha = clamp(1 - age / 10, 0, 1);
+        if (E.oc === 1 && age < 3) {
+          const rays = E.glance ? 6 : 12, r2 = (E.glance ? 0.1 : E.dmg >= 5 ? 0.3 : 0.18) * sc * (1 + age * 0.25);
+          c.strokeStyle = E.ctr ? '#ff5a4f' : '#ffe066'; c.lineWidth = E.glance ? 2 : 3;
+          for (let j = 0; j < rays; j++) { const an = j * 2 * Math.PI / rays + E.t1; c.beginPath(); c.moveTo(px + Math.cos(an) * 0.05 * sc, py + Math.sin(an) * 0.05 * sc); c.lineTo(px + Math.cos(an) * r2, py + Math.sin(an) * r2); c.stroke(); }
+        } else if (E.oc === 2 && age < 4) {
+          c.strokeStyle = 'rgba(190,220,255,0.9)'; c.lineWidth = 2.5; c.beginPath(); c.arc(px, py, (0.06 + 0.05 * age) * sc, 0, Math.PI * 2); c.stroke();
+        } else if (E.oc === 3 && E.ev === M.PARRY && age < 3) {
+          c.fillStyle = 'rgba(255,255,255,0.85)'; c.beginPath(); c.arc(px, py, (0.05 + 0.02 * age) * sc, 0, Math.PI * 2); c.fill();
+        } else if (E.oc >= 3 && age < 3) {
+          const q = cam.P(...add3(K.T, mul3(K.inDir, -0.3)));
+          c.strokeStyle = 'rgba(255,255,255,0.45)'; c.lineWidth = 2;
+          for (const o of [-0.035, 0.035]) { c.beginPath(); c.moveTo(q[0], q[1] + o * sc); c.lineTo(px + (px - q[0]) * 0.25, py + (py - q[1]) * 0.25 + o * sc); c.stroke(); }
+        }
+        if (opts.dmgNumbers && E.oc === 1 && age < 12) {
+          c.globalAlpha = 1 - age / 12; c.font = `800 ${Math.max(12, 0.17 * sc)}px system-ui`; c.textAlign = 'center';
+          c.fillStyle = 'rgba(0,0,0,0.5)'; c.fillText('−' + E.dmg, px + 1, py - (0.35 + age * 0.02) * sc + 1);
+          c.fillStyle = E.ctr ? '#ffb3ad' : '#ffffff'; c.fillText('−' + E.dmg, px, py - (0.35 + age * 0.02) * sc);
+        }
+        c.restore();
+      }
+    }
   }
 
   // ---------------------------------------------------------------- 转播镜头：四个机位、跟拍、按两人距离推拉（整场预先算好，平滑）
@@ -531,54 +1313,28 @@ const VIZ = (() => {
   // ---------------------------------------------------------------- 一帧比赛画面（不含转播包装）
   function drawBoutFrame(c, rep, tf, box, opts = {}) {
     prep(rep);
-    const n = rep.frames.length, t = clamp(Math.floor(tf), 0, n - 1), a = tf - Math.floor(tf);
+    const n = rep.frames.length, t = clamp(Math.floor(tf), 0, n - 1), a = tf - Math.floor(tf), tq = clamp(tf, 0, n - 1);
     const camv = opts.cam || lerpCam(rep._cam[t], rep._cam[Math.min(n - 1, t + 1)], a);
     const cam = makeCam(box, camv);
     const P = rep._prep;
     const bigNow = P.events.some(e => e.t <= t && t - e.t < 4 && e.big >= 2);
     const near = drawArena(c, box, cam, t, bigNow, opts.gym, opts.apron);
-    const fr = rep.frames[t], nx = rep.frames[Math.min(n - 1, t + 1)];
-    const pos = [0, 1].map(k => [lerp(fr.f[k][F.x], nx.f[k][F.x], a), lerp(fr.f[k][F.y], nx.f[k][F.y], a)]);
     const ids = opts.ids || [rep.bodies[0].id, rep.bodies[1].id];
-    const order = [0, 1].sort((i, j) => cam.W(...pos[j])[1] - cam.W(...pos[i])[1]);      // 远的先画
-    const tags = [];
-    for (const k of order) {
-      const [sx, sy, sc] = cam.P(pos[k][0], pos[k][1]);
-      const [ox] = cam.P(pos[1 - k][0], pos[1 - k][1]);
-      const th = fr.f[k][F.th], [hu] = cam.W(pos[k][0] + Math.cos(th), pos[k][1] + Math.sin(th));
-      let dir = Math.abs(ox - sx) > 3 ? Math.sign(ox - sx) : (hu >= cam.W(...pos[k])[0] ? 1 : -1);
-      c.fillStyle = 'rgba(0,0,0,0.28)'; c.beginPath(); c.ellipse(sx, sy, 0.4 * sc, 0.09 * sc, 0, 0, Math.PI * 2); c.fill();
-      const pose = poseAt(rep, tf, k);
-      // 仰面倒下时头朝背后（-dir）。背靠围绳时往背后倒会倒出擂台，改成往台里倒
-      if (pose.down > 0.001) {
-        const v = cam.W(...pos[k])[1], headX = sx - dir * 1.2 * sc;
-        if (headX < cam.Pc(0, v)[0] || headX > cam.Pc(SIM.RING, v)[0]) dir = -dir;
-      }
-      const head = drawBoxer(c, sx, sy, sc, dir, ids[k], rep.bodies[k], pose, fr.f[k][F.st] < 0 ? -1 : 1);
-      if (opts.labels) tags.push({ text: opts.labels[k], hx: head.hx, hy: head.hy, hr: head.hr, side: -dir, col: accent(ids[k]) });
+    const Js = [0, 1].map(k => bodyPose(rep, tq, k));
+    Js.forEach((J, k) => armsOf(rep, tq, k, J, Js[1 - k]));
+    for (const J of Js) {
+      const [sx, sy, sc] = cam.P(J.pel[0], J.pel[1], 0);
+      c.fillStyle = 'rgba(0,0,0,0.28)'; c.beginPath(); c.ellipse(sx, sy, 0.42 * sc, 0.09 * sc, 0, 0, Math.PI * 2); c.fill();
     }
+    // 两个人的所有部件按离镜头的远近一起排序：拳套打到对方脸上、绕到对方头后面，前后关系都对
+    drawOrder(cam, Js, ids, c).forEach(p => p.f());
     near();
-    // 命中火花（伤害数字只在 opts.dmgNumbers 时画，转播画面不要）
-    for (let back = 0; back < 12; back++) {
-      const tt = t - back; if (tt < 1) break;
-      for (let k = 0; k < 2; k++) {
-        const f = rep.frames[tt].f[k]; if (!(f[F.fired] && f[F.oc] === 1)) continue;
-        const tg = rep.frames[tt].f[1 - k];
-        const B = build(rep.bodies[1 - k]);
-        const [px, py, sc] = cam.P(tg[F.x], tg[F.y], SIM.TGT[f[F.fired] - 1] === 0 ? B.shH + 0.15 : B.shH - 0.2);
-        c.globalAlpha = 1 - back / 12;
-        if (back < 3) {
-          c.strokeStyle = f[F.ctr] ? '#ff5a4f' : '#ffe066'; c.lineWidth = 3;
-          for (let i = 0; i < 12; i++) { const an = i * Math.PI / 6 + back; const r1 = 0.06 * sc, r2 = (f[F.dmg] >= 5 ? 0.3 : 0.18) * sc * (1 + back * 0.2); c.beginPath(); c.moveTo(px + Math.cos(an) * r1, py + Math.sin(an) * r1); c.lineTo(px + Math.cos(an) * r2, py + Math.sin(an) * r2); c.stroke(); }
-        }
-        if (opts.dmgNumbers) {
-          c.font = `800 ${Math.max(12, 0.17 * sc)}px system-ui`; c.textAlign = 'center';
-          c.fillStyle = 'rgba(0,0,0,0.5)'; c.fillText('−' + f[F.dmg], px + 1, py - (0.35 + back * 0.02) * sc + 1);
-          c.fillStyle = f[F.ctr] ? '#ffb3ad' : '#ffffff'; c.fillText('−' + f[F.dmg], px, py - (0.35 + back * 0.02) * sc);
-        }
-        c.globalAlpha = 1;
-      }
-    }
+    drawImpacts(c, rep, tq, cam, opts);
+    const tags = opts.labels ? Js.map((J, k) => {
+      const [hx, hy, sc] = cam.P(J.head[0], J.head[1], J.head[2]);
+      const du = cam.W(J.head[0] + Math.cos(J.faceAng), J.head[1] + Math.sin(J.faceAng))[0] - cam.W(J.head[0], J.head[1])[0];
+      return { text: opts.labels[k], hx, hy, hr: J.R.headR * sc, side: du >= 0 ? -1 : 1, col: accent(ids[k]) };
+    }) : [];
     nameTags(c, box, tags, box[1] + (opts.hud === false ? 6 : hudHeight(box) + 4));
     return { t, cam };
   }
@@ -1145,6 +1901,6 @@ const VIZ = (() => {
     return ev;
   }
 
-  return { accent, tickEvents, fightAudio, trainingAudio, drawTraining, guardPose, punchPose, F, PH, LOOK, look, build, drawBoxer, drawHead, prep, poseAt, drawBoutFrame, makeCam, drawArena, hud, hudHeight, caption, banner, timeline, segAt, renderFight, setSim: s => { SIM = s; }, ease, easeOut, lerp, clamp, shade, mixHex, hash };
+  return { accent, tickEvents, fightAudio, trainingAudio, drawTraining, guardPose, punchPose, F, PH, LOOK, look, build, drawBoxer, drawHead, prep, bodyPose, armsOf, targetOf, rigOf, feetAt, reachLim, drawOrder, drawBoutFrame, makeCam, drawArena, hud, hudHeight, caption, banner, timeline, segAt, renderFight, setSim: s => { SIM = s; }, ease, easeOut, lerp, clamp, shade, mixHex, hash };
 })();
 if (typeof window !== 'undefined') window.VIZ = VIZ;

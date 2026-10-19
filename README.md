@@ -48,6 +48,11 @@ py -X utf8 make_episode.py --run canon_s1,canon_s1b          # 试播集页面�
 # 正史第三段（首战之后，box2d-v15 规则）：从 canon_s1b 第 550 轮接着两人一起练，只练一次，练出什么就是什么
 py -X utf8 train.py --run canon_s1c --sim boxing --bodies GY,LJ --seed 3 --iters 300 --init canon_s1b:12 --record 2 --coach-frac 0.3 --vf-warmup 10 --gamma 0.999 --ent 0.005 --ent-end 0.003 --snap-every 25 --eval-n 32 --point-reward 0 --kd-reward 0
 node tools/export_video.mjs runs/episode_pilot.html runs/试播集.mp4 --items all
+# 画面核对：编排好的小场景（闪躲、拍挡、格挡、射程、倒地、缠抱、步法）+ 正史存档打一场，逐拳核对画面和模拟对不对得上
+py -X utf8 tools/viz_check.py --page                        # 另出一个能逐个场景看的核对页 runs/viz_check.html
+node tools/preview_frames.mjs runs/viz_check.html 截图目录 "0@3.45@1.8"   # 条目@秒@放大倍数，放大只有核对页认
+py -X utf8 tools/enrich_frames.py                           # 旧回放存好的帧补上画面字段（用 git 里当时那一版规则重算）
+node tools/audit_rig.mjs                                    # 小人体检：关节跳变、够不够得着、穿插、遮挡闪烁，报数和例子
 ```
 
 导出视频要先在 `tools/` 下 `npm install`（只装 puppeteer-core，用本机的 Edge），本机要有 ffmpeg，Python 要装 numpy 和 edge-tts。
@@ -58,7 +63,9 @@ node tools/export_video.mjs runs/episode_pilot.html runs/试播集.mp4 --items a
 |---|---|
 | `career.py` | 角色在两场比赛之间的生活：训练项目、疲劳伤病、睡眠饮食、称重、比赛夜、体检 |
 | `season.py` / `render_season.py` | 跑一个赛季并存档 / 用存档重新生成观看页 |
-| `viz.js` | 转播画面渲染：拳手骨骼与造型、动作、多机位导播（整场预先排好机位，两人不叠在一起）、擂台、开场卡、回合统计、读秒、慢镜回放、判定、训练场景。观看页和导出视频共用 |
+| `viz.js` | 转播画面渲染。比赛里的拳手是三维骨骼，按模拟的位置、朝向和动作时间摆好再用机位投影，所见即模拟（规则见规格文档"观看体验·所见即模拟"）；另有多机位导播（整场预先排好机位，两人不叠在一起）、擂台、开场卡、回合统计、读秒、慢镜回放、判定、训练场景。观看页和导出视频共用 |
+| `tools/viz_check.py` + `tools/check_viz.mjs` | 画面核对：每一拳在模拟结算那一帧，拳套是不是正好在落点上、被挡的是不是停在护手上、被躲开的是不是没碰到头、打空的是不是差了模拟算出来的那一截；拳不提前到、胳膊不拉长、脚不交叉 |
+| `tools/enrich_frames.py` | `runs/replay_frames/` 里旧回放的帧是 v15 以前存的，没有落点这些画面字段。从 git 取当时那一版 `boxing.py` 重算，原来的项一项不差才另存 `<key>.viz.json`，原来的帧不动 |
 | `season_template.html` | 赛季观看页（时间线、比赛、训练场、疲劳曲线） |
 | `tools/export_video.mjs` | 把观看页的画面逐帧导出成 mp4，再配上音轨 |
 | `make_episode.py` + `episode_template.html` | 试播集：片头、人物介绍、成长片段（出生和首战前用 `train.py --record` 存档节点另打的录像；中间几件大事是里程碑的版本重演：训练里那一场没录像，用当时的出招网络按当时的对手重打到同样的事发生，第一次找到的那场存进 `runs/<run>/milestone_reenact.json`，以后只读存档）、首战（只打一次存档，结果不重来）、片尾。人设和立绘读本地 `characters/`，不进仓库 |
@@ -114,7 +121,7 @@ py -X utf8 analyze.py --runs s1 s2 s3
 - `evals.jsonl`：每个版本对标准陪练、对对手的战绩和打法指标，成长曲线就从这里画
 - `matches/*.json`：回放档，只存初始距离和双方逐帧动作。模拟器是确定的，画面随时可以重新算，换机位、加特效都不用重新比赛
 - `milestones.jsonl` + `ckpt/<角色>_ms<轮数>.npz`（拳击版 `--record`）：第一次打中、第一次击倒之类的里程碑，记下对手是谁，并把那一刻两边的出招网络和熟练度另存一份，做节目时用它重演
-- `runs/replay_frames/`：试播集用到的回放算出来的画面帧。规则改版以后，旧回放在新规则下重算会走样，就读这里存好的，正史首战永远是当初那一场
+- `runs/replay_frames/`：试播集用到的回放算出来的画面帧。规则改版以后，旧回放在新规则下重算会走样，就读这里存好的，正史首战永远是当初那一场。`<key>.viz.json` 是补上画面字段的同一批帧（`tools/enrich_frames.py`），有就优先读
 
 ## 已知局限
 

@@ -1,4 +1,4 @@
-// 预览页面里的几帧：node tools/preview_frames.mjs <页面.html> <输出目录> "条目@秒,条目@秒"
+// 预览页面里的几帧：node tools/preview_frames.mjs <页面.html> <输出目录> "条目@秒,条目@秒@放大倍数"（放大倍数只有核对页 runs/viz_check.html 认）
 import puppeteer from 'puppeteer-core';
 import { pathToFileURL } from 'node:url';
 import { writeFileSync } from 'node:fs';
@@ -10,9 +10,9 @@ await p.waitForFunction(() => !window.EXPORT.ready || window.EXPORT.ready(), { t
 const items = await p.evaluate(() => EXPORT.items());
 console.log(items.map(x => `${x.i}:${x.title}(${x.dur.toFixed(1)}s)`).join(' '));
 for (const s of spec.split(',')) {
-  const [i, t] = s.split('@').map(Number);
-  const url = await p.evaluate((i, t) => EXPORT.frame(i, t, 1280, 720), i, t);
-  writeFileSync(`${outDir}/f_${i}_${t}.jpg`, Buffer.from(url.split(',')[1], 'base64'));
+  const [i, t, z = 1] = s.split('@').map(Number);
+  const url = await p.evaluate((i, t, z) => EXPORT.frame(i, t, 1280, 720, z), i, t, z);
+  writeFileSync(`${outDir}/f_${i}_${t}${z !== 1 ? '_x' + z : ''}.jpg`, Buffer.from(url.split(',')[1], 'base64'));
 }
 const au = await p.evaluate(() => EXPORT.audio(1, 0, 10).length);
 console.log('profile audio events', au);
