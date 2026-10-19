@@ -76,99 +76,8 @@ const VIZ = (() => {
   }
   const along = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t)];
 
-  // ---------------------------------------------------------------- 画一个拳手
-  // 姿势用"身体局部坐标"：x 朝对手为正（米），y 从地面往上（米）。屏幕上 sx = 脚下中心 + dir * x * s。
-  // pose: {crouch, lean, twist, head:[dx,dy], lead:[x,y], rear:[x,y], feet:[leadX, rearX, leadLift, rearLift],
-  //        down (0..1 倒地进度), face:{hurt, tilt, sweat, look}, leadBig, rearBig, leadBody, rearBody, label}
-  function drawBoxer(c, sx, sy, s, dir, id, body, pose, stance = 1) {
-    const L = look(id), B = build(body), ink = '#14161c', lw = Math.max(1.2, 0.012 * s);
-    const X = x => sx + dir * x * s, Y = y => sy - y * s;
-    const down = pose.down || 0;
-    if (down > 0.001) return drawDown(c, sx, sy, s, dir, id, body, pose);
-    const crouch = pose.crouch || 0, lean = pose.lean || 0, twist = pose.twist || 0;
-    const hipH = B.hipH - crouch * 0.16 * B.H;
-    const hip = [lean * 0.25, hipH];
-    const shC = [hip[0] + Math.sin(lean) * (B.shH - B.hipH), hipH + Math.cos(lean) * (B.shH - B.hipH)];
-    // 前后肩：侧面看，转腰时后肩往前送
-    const shSpan = 0.11 + B.chest * 0.25;
-    const shLead = [shC[0] + shSpan * (0.55 - 0.9 * twist), shC[1] + 0.01];
-    const shRear = [shC[0] - shSpan * (0.75 - 1.2 * twist), shC[1] - 0.01];
-    const headC = [shC[0] + 0.02 + Math.sin(lean) * 0.12 + (pose.head ? pose.head[0] : 0), shC[1] + B.neck + B.headR * 1.1 + (pose.head ? pose.head[1] : 0)];
-    // 近侧和远侧：正架面朝右时，后手在镜头这边；面朝左时，前手在镜头这边
-    const nearIsRear = (dir * stance) > 0;
-    const feet = pose.feet || [0.24, -0.2, 0, 0];
-    const P = p => [X(p[0]), Y(p[1])];
-    const leg = (fx, lift, far) => {
-      const top = [hip[0] + (far ? -0.03 : 0.03), hipH], ft = [fx, 0.06 + lift];
-      const k = ik(top[0], top[1], ft[0], ft[1], B.thigh, B.shin, 1);      // 膝盖往前弯
-      const knee = [k.jx, k.jy], w = B.legW * s;
-      const col = far ? shade(L.skin, -0.18) : L.skin;
-      // 大腿 → 膝盖收细 → 小腿肚 → 脚踝
-      limb(c, [top, along(top, knee, 0.4), knee, along(knee, ft, 0.3), ft].map(P), [w, w * 0.95, w * 0.62, w * 0.7, w * 0.42], col, ink, lw);
-      // 袜子和鞋
-      limb(c, [along(knee, ft, 0.72), ft].map(P), [w * 0.58, w * 0.5], far ? shade(L.sock, -0.2) : L.sock, ink, lw);
-      c.fillStyle = far ? shade(L.shoe, -0.25) : L.shoe; c.strokeStyle = ink; c.lineWidth = lw;
-      c.beginPath(); c.ellipse(X(fx + 0.04), Y(0.035 + lift), 0.11 * s, 0.045 * s, 0, 0, Math.PI * 2); c.fill(); c.stroke();
-    };
-    const arm = (sh, g, big, bodyShot, far, glove) => {
-      const k = ik(sh[0], sh[1], g[0], g[1], B.ua, B.fa, -1);                                     // 手肘往下
-      const col = far ? shade(L.skin, -0.18) : L.skin, el = [k.jx, k.jy], w = B.arm * s;
-      // 三角肌 → 二头肌 → 手肘收细 → 前臂 → 手腕（被拳套盖住）
-      limb(c, [sh, along(sh, el, 0.4), el, along(el, g, 0.35), g].map(P), [w * 1.15, w, w * 0.68, w * 0.74, w * 0.52], col, ink, lw);
-      const r = (big ? 1.15 : 1) * B.glove * s;
-      c.fillStyle = far ? shade(glove, -0.22) : glove; c.strokeStyle = ink; c.lineWidth = lw;
-      c.beginPath(); c.ellipse(X(g[0]), Y(g[1]), r * 1.1, r, 0, 0, Math.PI * 2); c.fill(); c.stroke();
-      c.strokeStyle = far ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.32)'; c.lineWidth = lw * 1.3;     // 皮面高光
-      c.beginPath(); c.ellipse(X(g[0]), Y(g[1]), r * 0.72, r * 0.62, 0, -Math.PI * 0.85, -Math.PI * 0.35); c.stroke(); c.strokeStyle = ink;
-      c.fillStyle = L.cuff; c.beginPath(); c.ellipse(X(g[0] - 0.06), Y(g[1]), r * 0.35, r * 0.75, 0, 0, Math.PI * 2); c.fill();
-      if (bodyShot) { c.strokeStyle = 'rgba(255,255,255,0.6)'; c.setLineDash([3, 3]); c.beginPath(); c.arc(X(g[0]), Y(g[1]), r * 1.35, 0, Math.PI * 2); c.stroke(); c.setLineDash([]); }
-    };
-    const lead = pose.lead, rear = pose.rear;
-    // 远侧的腿和手先画
-    leg(nearIsRear ? feet[0] : feet[1], nearIsRear ? feet[2] : feet[3], true);
-    if (nearIsRear) arm(shLead, lead, pose.leadBig, pose.leadBody, true, L.glove); else arm(shRear, rear, pose.rearBig, pose.rearBody, true, L.glove);
-    // 躯干：胸背轮廓 + 短裤
-    const tw = B.chest * (1 - 0.25 * Math.abs(twist - 0.3));
-    c.fillStyle = L.skin; c.strokeStyle = ink; c.lineWidth = lw;
-    c.beginPath();
-    c.moveTo(X(hip[0] + B.waist), Y(hipH + 0.05)); c.quadraticCurveTo(X(shC[0] + tw * 1.35), Y(shC[1] - 0.12), X(shC[0] + tw * 0.8), Y(shC[1] + 0.03));
-    c.lineTo(X(shC[0] - tw * 0.9), Y(shC[1] + 0.03)); c.quadraticCurveTo(X(shC[0] - tw * 1.2), Y(shC[1] - 0.2), X(hip[0] - B.waist), Y(hipH + 0.05));
-    c.closePath(); c.fill(); c.stroke();
-    // 胸肌、腹肌线：越壮越明显
-    c.strokeStyle = `rgba(0,0,0,${0.06 + 0.08 * B.mus})`; c.lineWidth = lw;
-    c.beginPath(); c.moveTo(X(shC[0] + tw * 1.0), Y(shC[1] - 0.05)); c.quadraticCurveTo(X(shC[0] + tw * 0.95), Y(shC[1] - 0.17), X(shC[0] + tw * 0.15), Y(shC[1] - 0.15)); c.stroke();
-    c.strokeStyle = 'rgba(0,0,0,0.12)'; c.beginPath(); c.moveTo(X(shC[0] + tw * 0.55), Y(shC[1] - 0.17)); c.quadraticCurveTo(X(hip[0] + B.waist * 1.1), Y((hipH + shC[1]) / 2), X(hip[0] + B.waist * 0.8), Y(hipH + 0.08)); c.stroke();
-    // 近侧的腿：画在短裤前面，大腿根被短裤盖住
-    leg(nearIsRear ? feet[1] : feet[0], nearIsRear ? feet[3] : feet[2], false);
-    // 短裤（腿粗的短裤也宽一点）
-    const sw = Math.max(B.waist, B.legW * 0.95);
-    c.fillStyle = L.trunk; c.strokeStyle = ink;
-    c.beginPath(); c.moveTo(X(hip[0] - sw * 1.15), Y(hipH + 0.08)); c.lineTo(X(hip[0] + sw * 1.15), Y(hipH + 0.08));
-    c.lineTo(X(hip[0] + sw * 1.3), Y(hipH - 0.2)); c.lineTo(X(hip[0] - sw * 1.3), Y(hipH - 0.2)); c.closePath(); c.fill(); c.stroke();
-    c.fillStyle = L.stripe ? shade(L.trunk, -0.35) : L.trunk2; c.fillRect(Math.min(X(hip[0] - sw * 1.15), X(hip[0] + sw * 1.15)), Y(hipH + 0.08), Math.abs(X(hip[0] + sw * 1.15) - X(hip[0] - sw * 1.15)), 0.035 * s);
-    if (L.stripe) {                 // 短裤外侧的竖条（立绘里的紫条 / 黑金条）
-      c.fillStyle = L.trunk2; c.beginPath();
-      c.moveTo(X(hip[0] + sw * 0.78), Y(hipH + 0.045)); c.lineTo(X(hip[0] + sw * 1.02), Y(hipH + 0.045));
-      c.lineTo(X(hip[0] + sw * 1.18), Y(hipH - 0.2)); c.lineTo(X(hip[0] + sw * 0.9), Y(hipH - 0.2)); c.closePath(); c.fill();
-      if (L.trim) { c.strokeStyle = L.trim; c.lineWidth = lw * 0.8; c.beginPath(); c.moveTo(X(hip[0] + sw * 0.78), Y(hipH + 0.045)); c.lineTo(X(hip[0] + sw * 0.9), Y(hipH - 0.2)); c.stroke(); c.strokeStyle = ink; }
-    }
-    // 脖子：抗击打越好越粗
-    limb(c, [[shC[0] + 0.01, shC[1] - 0.03], [headC[0] - 0.015, headC[1] - B.headR * 0.55]].map(P), [B.neckW * 1.2 * s, B.neckW * s], shade(L.skin, -0.06), ink, lw);
-    // 头
-    drawHead(c, X(headC[0]), Y(headC[1]), B.headR * s, dir, L, { ...(pose.face || {}), jaw: B.jaw }, lw, pose.flash);
-    // 近侧的手最后画
-    if (nearIsRear) arm(shRear, rear, pose.rearBig, pose.rearBody, false, L.glove); else arm(shLead, lead, pose.leadBig, pose.leadBody, false, L.glove);
-    if (pose.label) {
-      c.font = `700 ${Math.max(11, 0.15 * s)}px system-ui, "Microsoft YaHei"`; c.textAlign = 'center';
-      const ly = Y(headC[1] + B.headR * 2.4), lx = X(headC[0]);
-      c.fillStyle = 'rgba(0,0,0,0.45)'; c.fillText(pose.label, lx + 1, ly + 1);
-      c.fillStyle = '#ffffff'; c.fillText(pose.label, lx, ly);
-    }
-    return { hx: X(headC[0]), hy: Y(headC[1]), hr: B.headR * s };
-  }
-
-  // 头。psi 是脸朝向在画面里的角度：0 朝右、π 朝左、−π/2 正对镜头、π/2 背对镜头。五官按在头上的方位角投影，转到背面的不画
-  function drawHead(c, hx, hy, r, dir, L, face, lw, flash) { drawHead3(c, hx, hy, r, dir > 0 ? 0 : Math.PI, L, face, lw, flash); }
+  // ---------------------------------------------------------------- 画头
+  // psi 是脸朝向在画面里的角度：0 朝右、π 朝左、−π/2 正对镜头、π/2 背对镜头。五官按在头上的方位角投影，转到背面的不画
   function drawHead3(c, hx, hy, r, psi, L, face, lw, flash) {
     const ink = '#14161c', cs = Math.cos(psi), sn = Math.sin(psi), dir = cs >= 0 ? 1 : -1;
     const vis = az => Math.sin(psi + az) < 0.2, ax = (az, k) => hx + Math.cos(psi + az) * r * k;
@@ -188,7 +97,9 @@ const VIZ = (() => {
     for (const az of [0.42, -0.42]) {
       if (!vis(az)) continue;
       const ex = ax(az, 0.6), sq = clamp(-Math.sin(psi + az) * 1.3, 0.45, 1), inn = Math.sign(nose - ex) || dir;
-      if (face.hurt) {
+      if (face.sleep) {                // 睡着了：闭着眼
+        c.strokeStyle = ink; c.lineWidth = lw * 1.2; c.beginPath(); c.moveTo(ex - r * 0.14 * sq, ey); c.quadraticCurveTo(ex, ey + r * 0.09, ex + r * 0.14 * sq, ey); c.stroke();
+      } else if (face.hurt) {
         c.strokeStyle = ink; c.lineWidth = lw * 1.2; c.beginPath(); c.moveTo(ex - r * 0.15 * sq, ey - r * 0.1); c.lineTo(ex + r * 0.15 * sq, ey + r * 0.1); c.moveTo(ex - r * 0.15 * sq, ey + r * 0.1); c.lineTo(ex + r * 0.15 * sq, ey - r * 0.1); c.stroke();
       } else {
         c.fillStyle = '#ffffff'; c.beginPath(); c.ellipse(ex, ey, r * 0.16 * sq, r * 0.13, 0, 0, Math.PI * 2); c.fill();
@@ -248,24 +159,6 @@ const VIZ = (() => {
       for (let i = 0; i <= 6; i++) c.lineTo(hx - r * 0.9 + i * r * 0.3, hy - r * (i % 2 ? 0.18 : 0.42));
       c.closePath(); c.fill();
     }
-  }
-
-  function drawDown(c, sx, sy, s, dir, id, body, pose) {
-    // 倒地：从站姿到平躺的过渡（down 0→1）
-    const L = look(id), B = build(body), ink = '#14161c', lw = Math.max(1.2, 0.012 * s), d = ease(pose.down);
-    const ang = d * Math.PI / 2 * 0.98;                     // 身体从竖直倒到水平（往后倒）
-    const hipX = -0.25 * d, hipY = lerp(B.hipH, 0.14, d);
-    const len = B.shH - B.hipH + B.neck + B.headR * 2;
-    const X = x => sx + dir * x * s, Y = y => sy - y * s;
-    const shx = hipX - Math.sin(ang) * (B.shH - B.hipH), shy = hipY + Math.cos(ang) * (B.shH - B.hipH);
-    const hx = hipX - Math.sin(ang) * len, hy = hipY + Math.cos(ang) * len;
-    tube(c, [[X(hipX), Y(hipY)], [X(0.25 - 0.2 * d), Y(lerp(0.3, 0.18, d))], [X(0.45 - 0.05 * d), Y(0.06)]], B.legW * 0.85 * s, L.skin, ink, lw);
-    tube(c, [[X(hipX), Y(hipY)], [X(shx), Y(shy)]], B.chest * 1.6 * s, L.skin, ink, lw);
-    c.fillStyle = L.trunk; c.beginPath(); c.ellipse(X(hipX), Y(hipY), B.waist * 1.3 * s, 0.1 * s, -dir * ang, 0, Math.PI * 2); c.fill();
-    tube(c, [[X(shx), Y(shy)], [X(shx + 0.25), Y(shy + 0.15 - 0.2 * d)]], B.arm * 0.85 * s, L.skin, ink, lw);
-    c.fillStyle = L.glove; c.beginPath(); c.arc(X(shx + 0.25), Y(shy + 0.15 - 0.2 * d), B.glove * s, 0, Math.PI * 2); c.fill(); c.stroke();
-    drawHead(c, X(hx), Y(hy), B.headR * s, dir, L, { hurt: true }, lw);
-    return { hx: X(hx), hy: Y(hy), hr: B.headR * s };
   }
 
   function shade(hex, k) { return mixHex(hex, k < 0 ? '#000000' : '#ffffff', Math.abs(k)); }
@@ -657,6 +550,22 @@ const VIZ = (() => {
     }
     return { ld: ease(pre) * (1 - ease(arm)), dr, lg };
   }
+  // 一拳带动身体（比赛和训练馆共用）：ld 预备、dr 发力。改 q 里的转腰 yaw、前倾 pitch、屈膝 crouch、侧弯 roll、重心 pelL，
+  // 脚跟 heel、脚尖 fyaw（都是 [前脚, 后脚]）
+  function punchBody(q, typ, tgt, lead, ls, ld, dr) {
+    const sideH = lead ? ls : -ls;
+    if (typ === 0) {
+      if (lead) { q.yaw += ls * 0.3 * dr; q.pitch += 0.05 * dr; }                                     // 刺拳：前肩送出去
+      else { q.yaw += ls * 0.08 * ld - ls * 1.2 * dr; q.heel[1] += 0.02 * ld + 0.06 * dr; q.fyaw[1] += ls * 0.6 * dr; q.pitch += 0.08 * dr; }   // 后手直拳：拧后脚、转胯、后肩送到前面
+    } else if (typ === 1) {
+      if (lead) { q.yaw += ls * (0.15 * ld - 0.75 * dr); q.heel[0] += 0.04 * dr; q.fyaw[0] -= ls * 0.5 * dr; q.pelL += sideH * 0.03 * ld; q.roll -= sideH * 0.06 * dr; }   // 前手勾拳：重心压到前脚，前脚拧转
+      else { q.yaw += ls * (0.1 * ld - 1.1 * dr); q.heel[1] += 0.05 * dr; q.fyaw[1] += ls * 0.6 * dr; }
+    } else {
+      q.crouch += 0.1 * ld - 0.03 * dr; q.roll += sideH * 0.12 * ld;                                  // 上勾拳：先往出拳那侧沉下去，再蹬地往上
+      q.yaw -= ls * (lead ? 0.25 : 0.85) * dr; if (!lead) q.heel[1] += 0.05 * dr;
+    }
+    if (tgt === 1) { const lv = Math.max(ld, dr); q.crouch += 0.1 * lv; q.pitch += 0.1 * lv; }      // 打身体：屈膝降重心
+  }
   // 打到以后拳收回来的进度：打中的贴一下再收，被挡的弹回来，打空、被躲开的顺势送完再收
   function retract(E, tf) {
     const end = E.cut ?? E.t1, span = E.t2 - end;
@@ -708,18 +617,9 @@ const VIZ = (() => {
       if (!E) continue;
       const lead = h === 0, sideH = lead ? ls : -ls;
       if (E.feint) { const env = Math.sin(Math.PI * clamp((tf - E.t0) / (E.t2 - E.t0), 0, 1)); yaw += (lead ? ls * 0.15 : -ls * 0.3) * env; pitch += 0.04 * env; continue; }
-      const { ld, dr, lg } = punchDrive(E, tf);
-      if (E.typ === 0) {
-        if (lead) { yaw += ls * 0.3 * dr; pitch += 0.05 * dr; }                                     // 刺拳：前肩送出去
-        else { yaw += ls * 0.08 * ld - ls * 1.2 * dr; heel[1] += 0.02 * ld + 0.06 * dr; fyaw[1] += ls * 0.6 * dr; pitch += 0.08 * dr; }   // 后手直拳：拧后脚、转胯、后肩送到前面
-      } else if (E.typ === 1) {
-        if (lead) { yaw += ls * (0.15 * ld - 0.75 * dr); heel[0] += 0.04 * dr; fyaw[0] -= ls * 0.5 * dr; pelL += sideH * 0.03 * ld; roll -= sideH * 0.06 * dr; }   // 前手勾拳：重心压到前脚，前脚拧转
-        else { yaw += ls * (0.1 * ld - 1.1 * dr); heel[1] += 0.05 * dr; fyaw[1] += ls * 0.6 * dr; }
-      } else {
-        crouch += 0.1 * ld - 0.03 * dr; roll += sideH * 0.12 * ld;                                  // 上勾拳：先往出拳那侧沉下去，再蹬地往上
-        yaw -= ls * (lead ? 0.25 : 0.85) * dr; if (!lead) heel[1] += 0.05 * dr;
-      }
-      if (E.tgt === 1) { const lv = Math.max(ld, dr); crouch += 0.1 * lv; pitch += 0.1 * lv; }      // 打身体：屈膝降重心
+      const { ld, dr, lg } = punchDrive(E, tf), q = { yaw, pitch, crouch, roll, pelL, heel, fyaw };
+      punchBody(q, E.typ, E.tgt, lead, ls, ld, dr);
+      ({ yaw, pitch, crouch, roll, pelL } = q);
       const Lg = mode.lunge && mode.lunge.E === E ? mode.lunge.L : mode.core ? 0 : E.lunge;
       // 上步主要靠整个人往前移、少靠前倾（前倾多了肩膀往下掉，离落点反而远）
       if (Lg) { pelF += 0.7 * Lg * lg; lungePitch += Math.asin(clamp(0.3 * Lg / R.spine, -0.5, 0.8)) * lg; slide += (lead ? 0.85 : 0.5) * Math.max(0, Lg) * lg; }
@@ -1098,7 +998,10 @@ const VIZ = (() => {
     const T = torsoWidths(cam, J), A = T.pj(add3(J.pel, [0, 0, 0.07])), B = T.pj(add3(J.pel, [0, 0, -0.17]));
     const w = T.hip(J.pel, 0.075) * Math.max(1, J.R.legW / 0.13);
     c.fillStyle = L.trunk; c.strokeStyle = ink; c.lineWidth = lw;
-    if (J.down > 0.4) { c.beginPath(); c.ellipse(A[0], (A[1] + B[1]) / 2, w * 0.6, Math.abs(B[1] - A[1]) / 2 + 0.06 * A[2], 0, 0, Math.PI * 2); c.fill(); c.stroke(); return; }
+    if (J.down > 0.4) {             // 躺着：顺着身子画一截（从胯往大腿那边）
+      const a = T.pj(J.pel), b = T.pj(lerp3(J.pel, lerp3(J.knees[0], J.knees[1], 0.5), 0.45));
+      c.beginPath(); c.ellipse((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, Math.hypot(b[0] - a[0], b[1] - a[1]) / 2 + 0.08 * a[2], w * 0.42, Math.atan2(b[1] - a[1], b[0] - a[0]), 0, Math.PI * 2); c.fill(); c.stroke(); return;
+    }
     c.beginPath(); c.moveTo(A[0] - w / 2, A[1]); c.lineTo(A[0] + w / 2, A[1]); c.lineTo(B[0] + w * 0.57, B[1]); c.lineTo(B[0] - w * 0.57, B[1]); c.closePath(); c.fill(); c.stroke();
     c.fillStyle = L.stripe ? shade(L.trunk, -0.35) : L.trunk2; c.fillRect(A[0] - w / 2, A[1], w, 0.035 * A[2]);
     if (L.stripe) {                 // 短裤外侧的竖条（立绘里的紫条 / 黑金条），画在朝镜头的那条腿外侧
@@ -1528,14 +1431,13 @@ const VIZ = (() => {
     }
     const s = h * 0.36, slide = easeOut(p * 2.5);
     for (let k = 0; k < 2; k++) {
-      const id = card.fighters[k], B = build(rep.bodies[k]);
+      const id = card.fighters[k], b = rep.bodies[k];
       const sx = k === 0 ? x0 + w * (0.02 + 0.16 * slide) : x0 + w * (0.98 - 0.16 * slide);
       if (meta.drawPortrait) {        // 有立绘就用立绘（试播集）
         const pw = w * 0.3, px = k === 0 ? x0 + w * (-0.06 + 0.08 * slide) : x0 + w * (0.76 - 0.08 * slide);
         meta.drawPortrait(c, id, px, y0, pw, h, slide);
       } else {
-        const pose = { crouch: 0.05, lean: 0.03, twist: 0.3, head: [0, 0], lead: [0.33, B.shH + 0.02], rear: [0.17, B.shH + 0.08], feet: [0.24, -0.2, 0, 0], face: {} };
-        drawBoxer(c, sx, y0 + h * 0.93, s, k === 0 ? 1 : -1, id, rep.bodies[k], pose);
+        drawFigures(c, sideCam(sx, y0 + h * 0.93, s), [{ J: trainPose(rig(b), { th: k === 0 ? 0 : Math.PI, ls: b && b.stance === 'southpaw' ? -1 : 1 }), id }]);
       }
       c.font = `900 ${h * 0.065}px "Microsoft YaHei"`; c.textAlign = k === 0 ? 'left' : 'right'; c.fillStyle = '#fff';
       c.fillText(meta.names[k], k === 0 ? x0 + w * 0.03 : x0 + w * 0.97, y0 + h * 0.12);
@@ -1600,6 +1502,78 @@ const VIZ = (() => {
     }
   }
 
+  // ---------------------------------------------------------------- 训练馆、开场卡里的三维小人：和比赛同一副骨骼、同一套画法，按训练项目摆姿势
+  // 训练馆的镜头：侧面平视。(cx, floor) 是世界原点在画面上的位置，s 是每米多少像素；y 往里是纵深（远一点画得稍高一点）
+  function sideCam(cx, floor, s) {
+    return { rot: 0, P: (x, y, z = 0) => [cx + x * s, floor - z * s - y * s * 0.12, s], W: (x, y) => [x, y] };
+  }
+  // 摆一个姿势。o 里的位置是局部坐标 [前, 左, 上]（米，左右按解剖学），世界里站在 (x, y)、朝 th：
+  //   lift 整个人离地（跳绳）；crouch、pitch、roll、alpha（侧身，+ = 前肩在前）、pelF、pelZ：骨盆；headF：头往前探
+  //   feet：[左脚, 右脚] 的 [前, 左, 抬起, 脚尖朝向]，不给就是拳击站姿
+  //   gloves：[前手, 后手]，{head: [前, 左, 上]} 相对头，{at: [...]} 相对脚下，{w: 世界坐标}；不给就是标准高位护手；elbow：肘往哪边弯（局部方向）
+  //   punch：{p, e, to}：第 p 种拳打到 e（0 护手 → 1 打到），to 是打到时拳套中心的世界坐标，不给就朝身前打满
+  //   look：脸往哪偏；face：表情
+  function trainPose(R, o = {}) {
+    const ls = o.ls ?? 1, th = o.th ?? 0, c = Math.cos(th), s = Math.sin(th), x = o.x ?? 0, y = o.y ?? 0, up = o.lift ?? 0;
+    const W = (lf, ll, lz) => [x + c * lf - s * ll, y + s * lf + c * ll, lz + up], Wv = (lf, ll, lz) => [c * lf - s * ll, s * lf + c * ll, lz];
+    const q = { yaw: ls * (o.alpha ?? 0.6), pitch: o.pitch ?? 0.12, crouch: o.crouch ?? 0.03, roll: o.roll ?? 0, pelL: 0, heel: [0, 0], fyaw: [0, 0] };
+    const P = o.punch, lead = P ? SIM.HAND[P.p] === 0 : true;
+    if (P) punchBody(q, SIM.TYPE[P.p], SIM.TGT[P.p], lead, ls, 0, P.e);
+    const pel = W(o.pelF ?? 0, q.pelL, o.pelZ ?? R.hipZ - q.crouch);
+    const sp = Wv(Math.sin(q.pitch) * Math.cos(q.roll), Math.sin(q.roll), Math.cos(q.pitch) * Math.cos(q.roll)), chest = add3(pel, mul3(sp, R.spine));
+    const shAx = Wv(Math.sin(q.yaw), Math.cos(q.yaw), -Math.sin(q.roll) * Math.cos(q.yaw));
+    const shL = add3(chest, mul3(shAx, R.shHalf)), shR = sub3(chest, mul3(shAx, R.shHalf));
+    const hy = 0.55 * q.yaw, hipAx = Wv(Math.sin(hy), Math.cos(hy), 0);
+    const hipL = add3(pel, mul3(hipAx, R.hipHalf)), hipR = sub3(pel, mul3(hipAx, R.hipHalf));
+    const head = add3(add3(chest, mul3(sp, R.neckL + R.headR * 0.95)), Wv(o.headF ?? 0.04, 0, 0));
+    const fw = Wv(1, 0, 0), sh = ls > 0 ? [shL, shR] : [shR, shL];
+    const ankles = [], knees = [], footYaw = [], heels = [];
+    for (let i = 0; i < 2; i++) {
+      const role = (i === 0) === (ls > 0) ? 0 : 1;
+      const [f, l, lift, yw] = (o.feet && o.feet[i]) || (role === 0 ? [0.2, ls * 0.1, 0, -ls * 0.25] : [-0.22, -ls * 0.12, 0, -ls * 0.85]);
+      const yawF = th + yw + q.fyaw[role];
+      const kn = ik3(i ? hipR : hipL, W(f, l, R.ankle + lift + q.heel[role]), R.thigh, R.shin, [Math.cos(yawF), Math.sin(yawF), 0.25], fw);
+      ankles.push(kn.G); knees.push(kn.E); footYaw.push(yawF); heels.push(q.heel[role]);
+    }
+    const gloves = [], elbows = [];
+    for (let h = 0; h < 2; h++) {
+      const side = h === 0 ? ls : -ls, out = Wv(0, side, 0), S = sh[h];
+      const g = (o.gloves && o.gloves[h]) || { head: h === 0 ? [0.2, ls * 0.06, -0.06] : [0.12, -ls * 0.08, -0.08] };
+      let G = g.w || (g.head ? add3(head, Wv(...g.head)) : W(...g.at)), pole = g.elbow ? norm3(Wv(...g.elbow)) : norm3(add3([0, 0, -1], mul3(out, 0.3)));
+      if (P && (h === 0) === lead) {
+        const typ = SIM.TYPE[P.p], arm = R.ua + R.fa, tz = SIM.TGT[P.p] === 0 ? head[2] - 0.04 : chest[2] - 0.15;
+        const T = P.to || add3(add3(S, mul3(fw, arm * (typ === 0 ? 0.92 : typ === 1 ? 0.55 : 0.6))), [0, 0, tz - S[2]]);
+        G = punchPath({ typ }, G, T, P.e, out, fw);
+        const tp = typ === 1 ? norm3(add3(out, [0, 0, 0.35])) : typ === 2 ? norm3(add3([0, 0, -1], mul3(fw, -0.3))) : norm3(add3([0, 0, -1], mul3(out, 0.25)));
+        pole = norm3(lerp3(pole, tp, P.e));
+      }
+      const uz = (G[2] - S[2]) / (len3(sub3(G, S)) || 1);
+      const kk = ik3(S, G, R.ua, R.fa, pole, g.elbow ? null : add3(mul3(out, clamp(-uz * 2, 0, 1) + 0.1), mul3(fw, clamp(uz * 2, 0, 1))));
+      gloves.push(kk.G); elbows.push(kk.E);
+    }
+    return { k: o.k ?? 0, R, ls, x, y, th, c, s, Wv, pel, chest, shL, shR, hipL, hipR, head, faceAng: th + (o.look ?? 0),
+      ankles, knees, footYaw, heels, sh, gloves, elbows, flash: false, face: { jaw: R.jaw, ...(o.face || {}) } };
+  }
+  // 仰面躺着（休息）：头朝 −x，脚朝 +x，zb 是床面高度；脸转向镜头，闭着眼
+  function lieRig(R, ls, x0, zb) {
+    const P = (b, l, z) => [x0 + b, l, zb + z], cb = -R.spine, byRole = a => ls > 0 ? a : [a[1], a[0]];
+    const shL = P(cb, R.shHalf, 0.13), shR = P(cb, -R.shHalf, 0.13);
+    return { k: 0, R, ls, x: x0, y: 0, th: Math.PI, pel: P(0, 0, 0.12), chest: P(cb, 0, 0.14), head: P(cb - R.neckL - R.headR, 0, 0.14),
+      shL, shR, hipL: P(0, R.hipHalf, 0.12), hipR: P(0, -R.hipHalf, 0.12), knees: [P(0.32, 0.12, 0.28), P(0.3, -0.12, 0.26)],
+      ankles: [P(0.62, 0.13, 0.07), P(0.6, -0.13, 0.07)], footYaw: [0, 0], heels: [0, 0], sh: byRole([shL, shR]),
+      elbows: byRole([P(cb + 0.22, 0.27, 0.07), P(cb + 0.22, -0.27, 0.07)]), gloves: byRole([P(cb + 0.42, 0.14, 0.15), P(cb + 0.42, -0.14, 0.15)]),
+      faceAng: -Math.PI / 2, flash: false, down: 1, face: { jaw: R.jaw, sleep: true } };
+  }
+  // 画几个摆好姿势的人（figs：[{J, id}]，一个或两个），脚下带影子
+  function drawFigures(c, cam, figs) {
+    for (const { J } of figs) {
+      if (J.down) continue;
+      const [sx, sy, sc] = cam.P(J.pel[0], J.pel[1], 0);
+      c.fillStyle = 'rgba(0,0,0,0.3)'; c.beginPath(); c.ellipse(sx, sy, 0.38 * sc, 0.07 * sc, 0, 0, Math.PI * 2); c.fill();
+    }
+    (figs.length === 2 ? drawOrder(cam, figs.map(q => q.J), figs.map(q => q.id), c) : rigParts(c, cam, figs[0].J, figs[0].id)).forEach(q => q.f());
+  }
+
   // ---------------------------------------------------------------- 训练馆
   function gymWall(c, box) {
     const [x0, y0, w, h] = box;
@@ -1630,41 +1604,24 @@ const VIZ = (() => {
     return () => ropes(c, cam, 'near');
   }
 
-  // 训练场景用的姿势
-  function guardPose(B) {
-    return { crouch: 0.08, lean: 0.05, twist: 0.3, head: [0, 0], lead: [0.33, B.shH + 0.02], rear: [0.17, B.shH + 0.08], feet: [0.24, -0.2, 0, 0], face: {} };
-  }
-  function punchPose(B, k, e, reach) {
-    const p = guardPose(B);
-    const typ = SIM.TYPE[k], tgt = SIM.TGT[k], hand = SIM.HAND[k];
-    const tx = reach || (B.ua + B.fa) * 0.95, ty = tgt === 0 ? B.shH + 0.1 : B.shH - 0.22, from = hand === 0 ? p.lead : p.rear;
-    let g;
-    if (typ === 0) g = [lerp(from[0], tx, e), lerp(from[1], ty, e)];
-    else if (typ === 1) g = [from[0] + (tx * 0.8 - from[0]) * Math.sin(e * Math.PI / 2), lerp(from[1], ty, e) + 0.08 * Math.sin(e * Math.PI)];
-    else g = [lerp(from[0], tx * 0.7, e), from[1] - 0.2 * Math.sin(e * Math.PI) * (1 - e) + (ty - from[1]) * e];
-    if (hand === 0) { p.lead = g; p.leadBig = typ === 2; p.leadBody = tgt === 1; }
-    else { p.rear = g; p.rearBig = typ >= 1; p.rearBody = tgt === 1; p.twist = 0.3 + 0.55 * e; }
-    if (tgt === 1) { p.crouch += 0.25 * e; p.lean += 0.12 * e; }
-    return p;
-  }
   const punchEnv = ph => { const x = ph % 1; return x < 0.25 ? easeOut(x / 0.25) : 1 - ease((x - 0.25) / 0.45); };
 
   // 一个训练日的场景。entry：这一天的日志；ctx：{bodyOf, clips, techNames, names, plansFor(day,id), lastFight(day)}
   function drawTraining(c, id, entry, box, t, ctx) {
     const [x0, y0, w, h] = box, act = entry.activity, note = entry.note || {};
-    const body = ctx.bodyOf(id), B = build(body);
+    const body = ctx.bodyOf(id), R = rig(body), ls = body && body.stance === 'southpaw' ? -1 : 1;
     c.save(); c.beginPath(); c.rect(x0, y0, w, h); c.clip();
-    const floor = y0 + h * 0.86, s = h / 2.55, cx = x0 + w * 0.42;
+    const floor = y0 + h * 0.86, s = h / 2.55, cx = x0 + w * 0.42, cam = sideCam(cx, floor, s), shZ = R.hipZ + R.spine;
     const techs = (note.techs && note.techs.length ? note.techs : ['刺拳·头', '后手直拳·头']).map(n => ctx.techNames.indexOf(n)).filter(i => i >= 0 && i < 12);
     const curTech = techs[Math.floor(t * 1.2) % techs.length];
+    const me = o => ({ J: trainPose(R, { ls, ...o }), id });
     let cap = act;
-    const shadow = (x, sc = s) => { c.fillStyle = 'rgba(0,0,0,0.3)'; c.beginPath(); c.ellipse(x, floor, 0.38 * sc, 0.07 * sc, 0, 0, Math.PI * 2); c.fill(); };
     if (act.startsWith('对练')) {
       const clip = ctx.clips[`${entry.day}_${id}`];
       if (clip) {
         const rep = clip._rep || (clip._rep = prep({ frames: clip.frames, bodies: clip.bodies }));
         drawBoutFrame(c, rep, (t * 20) % rep.frames.length, box, { gym: true, hud: false, ids: [id, 'S'], labels: [ctx.names[id], clip.partner] });
-      } else { gymWall(c, box); gymFloor(c, box, floor); shadow(cx); drawBoxer(c, cx, floor, s, 1, id, body, guardPose(B)); }
+      } else { gymWall(c, box); gymFloor(c, box, floor); drawFigures(c, cam, [me({})]); }
       if (note.iters) cap += ` · 真实训练 ${note.iters} 轮`;
     } else if (act === '看录像' || act === '实战复盘') {
       c.fillStyle = '#15171d'; c.fillRect(x0, y0, w, h);
@@ -1673,9 +1630,11 @@ const VIZ = (() => {
       const fg = ctx.lastFight(entry.day);
       if (fg) { c.save(); c.beginPath(); c.rect(tvx, tvy, tvw, tvh); c.clip(); prep(fg); drawBoutFrame(c, fg, (t * 20 + 200) % fg.frames.length, [tvx, tvy, tvw, tvh], { hud: false, ids: fg.fighters, labels: fg.fighters }); c.restore(); }
       c.fillStyle = 'rgba(255,255,255,0.05)'; c.fillRect(tvx, tvy, tvw, tvh * 0.5);
-      c.fillStyle = '#3b2c22'; c.fillRect(cx - 0.5 * s, floor - 0.45 * s, 1.0 * s, 0.08 * s);
-      const sit = guardPose(B); sit.crouch = 1.4; sit.lean = 0.05; sit.lead = [0.32, B.hipH * 0.55]; sit.rear = [0.25, B.hipH * 0.5]; sit.feet = [0.32, 0.18, 0, 0];
-      drawBoxer(c, cx, floor, s * 0.8, -1, id, body, sit);
+      // 坐在长凳上看（坐得靠后，画小一点），身子往前探，两手搭在膝盖上
+      const cs = sideCam(cx, floor, s * 0.8), b0 = cs.P(-0.6, 0, 0.45), b1 = cs.P(0.6, 0, 0.45);
+      c.fillStyle = '#3b2c22'; c.fillRect(b0[0], b0[1], b1[0] - b0[0], 0.1 * s * 0.8);
+      drawFigures(c, cs, [me({ th: Math.PI, pelZ: 0.52, pitch: 0.25, alpha: 0.1, headF: 0.07, feet: [[0.42, 0.14, 0, 0], [0.42, -0.14, 0, 0]],
+        gloves: [{ at: [0.36, ls * 0.12, 0.6] }, { at: [0.36, -ls * 0.12, 0.6] }] })]);
       if (act === '看录像' && note.target) cap += ` · 研究 ${ctx.names[note.target] || note.target}：了解度 ${(entry.before.knowledge[note.target] || 0).toFixed(2)} → ${(entry.after.knowledge[note.target] || 0).toFixed(2)}`;
     } else {
       gymWall(c, box); gymFloor(c, box, floor);
@@ -1683,7 +1642,7 @@ const VIZ = (() => {
       if (act === '休息') {
         c.fillStyle = '#d8dbe2'; c.fillRect(cx - 0.9 * s, floor - 0.42 * s, 1.9 * s, 0.14 * s);
         c.fillStyle = '#7a7f8a'; c.fillRect(cx - 0.95 * s, floor - 0.3 * s, 0.08 * s, 0.3 * s); c.fillRect(cx + 0.9 * s, floor - 0.3 * s, 0.08 * s, 0.3 * s);
-        drawBoxer(c, cx + 0.3 * s, floor - 0.42 * s, s, 1, id, body, { down: 1 });
+        drawFigures(c, cam, [{ J: lieRig(R, ls, 0.15, 0.42), id }]);
         c.fillStyle = 'rgba(255,255,255,0.8)'; c.font = `800 ${0.22 * s}px system-ui`; c.textAlign = 'center';
         for (let i = 0; i < 3; i++) { const q = (t * 0.5 + i / 3) % 1; c.globalAlpha = 1 - q; c.fillText('Z', cx - 0.7 * s + q * 0.4 * s, floor - (0.8 + q * 0.6) * s); }
         c.globalAlpha = 1;
@@ -1692,60 +1651,77 @@ const VIZ = (() => {
         c.fillStyle = '#2a2d34'; c.fillRect(cx - 0.8 * s, floor - 0.12 * s, 1.6 * s, 0.12 * s);
         c.strokeStyle = 'rgba(255,255,255,0.25)'; c.lineWidth = 2; c.setLineDash([12, 10]); c.lineDashOffset = t * 80;
         c.beginPath(); c.moveTo(cx - 0.8 * s, floor - 0.06 * s); c.lineTo(cx + 0.8 * s, floor - 0.06 * s); c.stroke(); c.setLineDash([]);
-        const sw = Math.sin(ph * 2);
-        const p = guardPose(B); p.lean = 0.15; p.lead = [0.15 + 0.2 * sw, B.shH - 0.12]; p.rear = [0.1 - 0.2 * sw, B.shH - 0.12];
-        p.feet = [0.05 + 0.32 * sw, 0.05 - 0.32 * sw, 0.12 * Math.max(0, Math.cos(ph * 2)), 0.12 * Math.max(0, -Math.cos(ph * 2))];
-        drawBoxer(c, cx, floor - 0.12 * s - Math.abs(sw) * 0.03 * s, s, 1, id, body, p);
+        // 跑步机上：两腿交替、离地的那只脚抬起来，胳膊跟腿反着摆
+        const sw = Math.sin(ph * 2), cs = Math.cos(ph * 2), armF = side => 0.1 - 0.22 * sw * side;
+        drawFigures(c, cam, [me({ lift: 0.12 + Math.abs(sw) * 0.03, alpha: 0.1, pitch: 0.2, crouch: 0.06,
+          feet: [[0.05 + 0.3 * sw, 0.09, 0.12 * Math.max(0, cs), 0], [0.05 - 0.3 * sw, -0.09, 0.12 * Math.max(0, -cs), 0]],
+          gloves: [{ at: [armF(ls), ls * 0.2, shZ - 0.35] }, { at: [armF(-ls), -ls * 0.2, shZ - 0.35] }] })]);
       } else if (act === '跳绳') {
+        // 正对镜头：两脚并拢跳，手在胯两边摇绳
         const jump = Math.abs(Math.sin(ph * 2)) * 0.12;
-        const p = guardPose(B); p.lean = 0; p.lead = [0.2, B.hipH + 0.05]; p.rear = [-0.05, B.hipH + 0.05]; p.feet = [0.06, -0.06, 0, 0];
-        shadow(cx); drawBoxer(c, cx, floor - jump * s, s, 1, id, body, p);
-        const ry = Math.cos(ph * 2);
+        const J = trainPose(R, { ls, th: -Math.PI / 2, lift: jump, alpha: 0, pitch: 0.05, crouch: 0.04 + 0.04 * (1 - jump / 0.12),
+          feet: [[0.02, 0.09, 0, 0.1], [0.02, -0.09, 0, -0.1]], gloves: [0, 1].map(h => ({ at: [0.12, (h ? -ls : ls) * 0.24, R.hipZ + 0.12], elbow: [-1, (h ? -ls : ls) * 0.2, -0.4] })) });   // 肘贴着身子在后面，小臂往两边摇
+        drawFigures(c, cam, [{ J, id }]);
+        const a = cam.P(...J.gloves[0]), b = cam.P(...J.gloves[1]), ry = Math.cos(ph * 2);
         c.strokeStyle = '#ffd24a'; c.lineWidth = 2.5; c.beginPath();
-        c.ellipse(cx + 0.07 * s, floor - (B.hipH * 0.6 + jump) * s - ry * B.H * 0.42 * s, 0.32 * s, Math.abs(ry) * B.H * 0.5 * s + 4, 0, 0, Math.PI * 2); c.stroke();
+        c.ellipse((a[0] + b[0]) / 2, (a[1] + b[1]) / 2 - ry * R.H * 0.42 * s, Math.abs(b[0] - a[0]) / 2 + 0.02 * s, Math.abs(ry) * R.H * 0.5 * s + 4, 0, 0, Math.PI * 2); c.stroke();
       } else if (act === '器械力量' || act === '循环训练') {
+        // 正对镜头：器械力量是推举杠铃，循环训练隔一秒换成抱着药球深蹲
         const squat = act === '循环训练' && Math.floor(t) % 2 === 1, up = (Math.sin(ph) + 1) / 2;
-        const p = guardPose(B); p.lean = 0;
-        if (squat) { p.crouch = 0.9 * up; p.lead = [0.3, B.shH - 0.2 * up]; p.rear = [0.25, B.shH - 0.2 * up]; }
-        else { p.lead = [0.05, B.shH + 0.05 + up * 0.45]; p.rear = [-0.02, B.shH + 0.05 + up * 0.45]; }
-        shadow(cx); drawBoxer(c, cx, floor, s, 1, id, body, p);
-        if (!squat) {
-          const by = floor - (B.shH + 0.05 + up * 0.45 - (p.crouch || 0) * 0.16 * B.H) * s;
-          c.strokeStyle = '#cfd3da'; c.lineWidth = 0.045 * s; c.beginPath(); c.moveTo(cx - 0.75 * s, by); c.lineTo(cx + 0.8 * s, by); c.stroke();
-          c.fillStyle = '#23262d'; for (const d of [-0.72, 0.72]) c.fillRect(cx + d * s - 0.06 * s, by - 0.22 * s, 0.12 * s, 0.44 * s);
-        } else { c.fillStyle = '#23262d'; c.beginPath(); c.arc(cx + 0.3 * s, floor - (B.shH - 0.32 * up) * s, 0.1 * s, 0, Math.PI * 2); c.fill(); }
+        if (squat) {
+          const J = trainPose(R, { ls, th: -Math.PI / 2, alpha: 0, crouch: 0.38 * up, pitch: 0.1 + 0.3 * up, pelF: -0.12 * up,
+            feet: [[0, 0.18, 0, 0.3], [0, -0.18, 0, -0.3]], gloves: [{ head: [0.3, ls * 0.11, -0.38] }, { head: [0.3, -ls * 0.11, -0.38] }] });
+          drawFigures(c, cam, [{ J, id }]);
+          const a = cam.P(...J.gloves[0]), b = cam.P(...J.gloves[1]);
+          c.fillStyle = '#23262d'; c.beginPath(); c.arc((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 0.12 * s, 0, Math.PI * 2); c.fill();
+        } else {
+          const barZ = shZ + 0.05 + up * 0.45;
+          const J = trainPose(R, { ls, th: -Math.PI / 2, alpha: 0, pitch: 0.02, feet: [[0, 0.16, 0, 0.15], [0, -0.16, 0, -0.15]],
+            gloves: [{ at: [0.02, ls * 0.28, barZ] }, { at: [0.02, -ls * 0.28, barZ] }] });
+          drawFigures(c, cam, [{ J, id }]);
+          const mid = lerp3(J.gloves[0], J.gloves[1], 0.5), ax = norm3(sub3(J.gloves[0], J.gloves[1]));
+          const e0 = cam.P(...add3(mid, mul3(ax, 0.78))), e1 = cam.P(...sub3(mid, mul3(ax, 0.78)));
+          c.strokeStyle = '#cfd3da'; c.lineWidth = 0.045 * s; c.beginPath(); c.moveTo(e0[0], e0[1]); c.lineTo(e1[0], e1[1]); c.stroke();
+          c.fillStyle = '#23262d';
+          for (const d of [0.72, -0.72]) { const q = cam.P(...add3(mid, mul3(ax, d))); c.fillRect(q[0] - 0.06 * s, q[1] - 0.22 * s, 0.12 * s, 0.44 * s); }
+        }
       } else if (act === '速度训练' || act === '招式训练') {
         const speed = act === '速度训练' ? 2.8 : 1.2;
         const k = act === '速度训练' ? [0, 2][Math.floor(t * speed) % 2] : curTech;
-        const p = punchPose(B, k, punchEnv(t * speed));
-        shadow(cx); drawBoxer(c, cx, floor, s, 1, id, body, p);
+        drawFigures(c, cam, [me({ punch: { p: k, e: punchEnv(t * speed) } })]);
         c.fillStyle = 'rgba(190,210,240,0.12)'; c.fillRect(cx + 1.05 * s, floor - 2.05 * s, 0.1 * s, 2.05 * s);
-        if (act === '速度训练') { c.strokeStyle = 'rgba(255,255,255,0.35)'; c.lineWidth = 2; for (let i = 0; i < 4; i++) { c.beginPath(); c.moveTo(cx + 0.55 * s, floor - (B.shH + 0.02 * i) * s); c.lineTo(cx + 0.9 * s, floor - (B.shH + 0.02 * i) * s); c.stroke(); } }
+        if (act === '速度训练') { c.strokeStyle = 'rgba(255,255,255,0.35)'; c.lineWidth = 2; for (let i = 0; i < 4; i++) { c.beginPath(); c.moveTo(cx + 0.55 * s, floor - (shZ + 0.02 * i) * s); c.lineTo(cx + 0.9 * s, floor - (shZ + 0.02 * i) * s); c.stroke(); } }
         else cap += ' · ' + ctx.techNames[k];
       } else if (act === '反应球') {
-        const bx = cx + (0.55 + 0.3 * Math.cos(ph * 1.6)) * s, by2 = floor - (B.shH + 0.1 + 0.25 * Math.abs(Math.sin(ph * 3.2))) * s;
+        // 前手去够弹来弹去的球，头跟着躲
+        const ball = [0.55 + 0.3 * Math.cos(ph * 1.6), -0.05, shZ + 0.1 + 0.25 * Math.abs(Math.sin(ph * 3.2))];
         c.fillStyle = '#4a4f5a'; c.fillRect(cx + 1.0 * s, floor - 2.0 * s, 0.08 * s, 2.0 * s);
-        const p = guardPose(B); p.lead = [0.4 + 0.12 * Math.cos(ph * 1.6), B.shH + 0.12]; p.head = [-0.04 * Math.sin(ph * 1.6), 0];
-        shadow(cx); drawBoxer(c, cx, floor, s, 1, id, body, p);
-        c.fillStyle = '#ff5a4f'; c.beginPath(); c.arc(bx, by2, 0.06 * s, 0, Math.PI * 2); c.fill();
+        drawFigures(c, cam, [me({ roll: 0.12 * Math.sin(ph * 1.6), gloves: [{ w: add3(ball, [-0.1, 0, 0]) }, null] })]);
+        const q = cam.P(...ball); c.fillStyle = '#ff5a4f'; c.beginPath(); c.arc(q[0], q[1], 0.06 * s, 0, Math.PI * 2); c.fill();
       } else if (act === '绳梯') {
         c.strokeStyle = '#ffd24a'; c.lineWidth = 2;
         for (let i = 0; i < 8; i++) { const lx = x0 + w * 0.08 + i * w * 0.105; c.strokeRect(lx, floor - 4, w * 0.1, 10); }
         const px = x0 + w * 0.12 + ((t * 0.22) % 1) * w * 0.75, q = ph * 4;
-        const p = guardPose(B); p.crouch = 0.25; p.feet = [0.12 + 0.1 * Math.sin(q), -0.1 - 0.1 * Math.sin(q), 0.06 * Math.max(0, Math.cos(q)), 0.06 * Math.max(0, -Math.cos(q))];
-        shadow(px); drawBoxer(c, px, floor, s, 1, id, body, p);
+        drawFigures(c, cam, [me({ x: (px - cx) / s, crouch: 0.1, alpha: 0.3,
+          feet: [[0.12 + 0.1 * Math.sin(q), 0.12, 0.06 * Math.max(0, Math.cos(q)), 0], [-0.1 - 0.1 * Math.sin(q), -0.12, 0.06 * Math.max(0, -Math.cos(q)), 0]] })]);
       } else if (act === '打沙袋' || act === '打手靶') {
-        const e = punchEnv(t * 1.3), k = techs[Math.floor(t * 1.3) % techs.length];
-        const p = punchPose(B, k, e, act === '打沙袋' ? 0.62 : 0.58);
-        shadow(cx - 0.3 * s); drawBoxer(c, cx - 0.3 * s, floor, s, 1, id, body, p);
+        const e = punchEnv(t * 1.3), k = techs[Math.floor(t * 1.3) % techs.length], tz = SIM.TGT[k] === 0 ? shZ + 0.15 : shZ - 0.15;
         if (act === '打沙袋') {
+          // 拳打在沙袋正面（打头的高度打上半截、打身体打下半截），打中了沙袋往后荡
           const sw = Math.max(0, e - 0.6) * 0.15;
           c.strokeStyle = '#9aa0aa'; c.lineWidth = 2; c.beginPath(); c.moveTo(cx + 0.55 * s, y0); c.lineTo(cx + (0.55 + sw) * s, floor - 1.85 * s); c.stroke();
           c.fillStyle = '#8b2c22'; c.strokeStyle = '#14161c'; c.beginPath(); c.roundRect(cx + (0.38 + sw) * s, floor - 1.85 * s, 0.36 * s, 1.15 * s, 0.14 * s); c.fill(); c.stroke();
           c.fillStyle = 'rgba(255,255,255,0.6)'; c.fillRect(cx + (0.38 + sw) * s, floor - 1.55 * s, 0.36 * s, 0.05 * s);
+          drawFigures(c, cam, [me({ x: -0.3, punch: { p: k, e, to: [0.38 + sw - R.glove * 1.05, 0, tz] } })]);
         } else {
-          const coach = guardPose(build(null)); coach.lead = [0.3, B.shH + (SIM.TGT[k] === 0 ? 0.1 : -0.2) + 0.03 * e]; coach.rear = [0.22, B.shH + 0.12]; coach.lean = -0.05 * e; coach.label = '教练';
-          shadow(cx + 0.65 * s); drawBoxer(c, cx + 0.65 * s, floor, s, -1, 'S', null, coach);
+          // 教练举着手靶迎着这一拳，打到时手靶被打得往后让一点
+          const Rc = rig(null), coach = trainPose(Rc, { x: 0.85, th: Math.PI, pitch: 0.08 - 0.05 * e,
+            gloves: [{ at: [0.34 - 0.03 * e, 0.04, tz] }, { head: [0.18, -0.1, -0.02] }] });
+          const to = add3(coach.gloves[0], [-(R.glove + Rc.glove) * 0.95, 0, 0]);
+          drawFigures(c, cam, [me({ x: -0.3, punch: { p: k, e, to } }), { J: coach, id: 'S' }]);
+          const hp = cam.P(...coach.head), ly = hp[1] - Rc.headR * s * 2.4;
+          c.font = `700 ${Math.max(11, 0.15 * s)}px system-ui, "Microsoft YaHei"`; c.textAlign = 'center';
+          c.fillStyle = 'rgba(0,0,0,0.45)'; c.fillText('教练', hp[0] + 1, ly + 1); c.fillStyle = '#ffffff'; c.fillText('教练', hp[0], ly);
         }
         cap += ' · ' + ctx.techNames[k];
       } else if (act === '战术会议') {
@@ -1758,9 +1734,9 @@ const VIZ = (() => {
           c.font = `${h * 0.035}px "Microsoft YaHei"`; c.fillStyle = '#333'; c.fillText(SIM.plans[pl], wbx + wbw * 0.05, yy + h * 0.03);
           c.fillStyle = i === 0 ? '#1baf7a' : '#8aa4c8'; c.fillRect(wbx + wbw * 0.36, yy, Math.max(4, (sc + 1) / 2 * wbw * 0.55 * grow), h * 0.04);
         });
-        const p = guardPose(B); p.lead = [0.55, B.shH + 0.25]; p.rear = [0.05, B.hipH + 0.1]; p.lean = 0;
-        shadow(x0 + w * 0.18); drawBoxer(c, x0 + w * 0.18, floor, s, 1, id, body, p);
-      } else { shadow(cx); drawBoxer(c, cx, floor, s, 1, id, body, guardPose(B)); }
+        // 站在白板前，前手指着排第一的战术
+        drawFigures(c, cam, [me({ x: (x0 + w * 0.18 - cx) / s, alpha: 0.3, gloves: [{ at: [0.55, ls * 0.1, shZ + 0.3] }, { at: [0.12, -ls * 0.15, R.hipZ + 0.1] }] })]);
+      } else drawFigures(c, cam, [me({})]);
     }
     // 夜里：兑现卡片（每 6 秒循环的后 35%）
     const night = entry.night, nt = (t % 6) / 6;
@@ -1901,6 +1877,6 @@ const VIZ = (() => {
     return ev;
   }
 
-  return { accent, tickEvents, fightAudio, trainingAudio, drawTraining, guardPose, punchPose, F, PH, LOOK, look, build, drawBoxer, drawHead, prep, bodyPose, armsOf, targetOf, rigOf, feetAt, reachLim, drawOrder, drawBoutFrame, makeCam, drawArena, hud, hudHeight, caption, banner, timeline, segAt, renderFight, setSim: s => { SIM = s; }, ease, easeOut, lerp, clamp, shade, mixHex, hash };
+  return { accent, tickEvents, fightAudio, trainingAudio, drawTraining, trainPose, drawFigures, sideCam, F, PH, LOOK, look, build, drawHead3, prep, bodyPose, armsOf, targetOf, rigOf, feetAt, reachLim, drawOrder, drawBoutFrame, makeCam, drawArena, hud, hudHeight, caption, banner, timeline, segAt, renderFight, setSim: s => { SIM = s; }, ease, easeOut, lerp, clamp, shade, mixHex, hash };
 })();
 if (typeof window !== 'undefined') window.VIZ = VIZ;
