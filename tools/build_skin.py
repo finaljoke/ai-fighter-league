@@ -350,8 +350,8 @@ def build(rid, debug=None):
         part("arm" + s, "arm", arm, -0.07, arm.cum[-1] + 0.006, "transport", m_arm(s), parent=top)
         leg = Chain([J["hip" + s], J["kn" + s], J["an" + s]])
         part("leg" + s, "leg", leg, -0.05, leg.cum[-1], "transport", m_leg(s), parent=bot)
-        fy = rg.pf(J["an" + s])
-        run = [x for x in range(int(fy[0]) - 80, int(fy[0]) + 80) if inside(x, 920)]
+        fy, row = rg.pf(J["an" + s]), int(rg.G - 30)          # 脚宽：离地 30 像素那一行（再低就量到台面上的影子）
+        run = [x for x in range(int(fy[0]) - 80, int(fy[0]) + 80) if inside(x, row)]
         half = (max(run) - min(run)) / 2 / S
         ft = Chain([[J["an" + s][0], foot["heel"], FOOT_ZC], [J["an" + s][0], foot["toe"], FOOT_ZC]])
         part("foot" + s, "foot", ft, 0.0, ft.cum[-1], lambda k, v, u, t: (lambda U: (np.cross(t, U), U, 0.0))(perp(np.array([0, 0, 1.0]), t)),
