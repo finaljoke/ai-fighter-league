@@ -21,6 +21,7 @@ from analyze import load_run
 from analyze_boxing import card as char_card
 from bodies import LANKY, STOCKY
 from nets import params_sha256, save_policy
+from render_season import build_html
 
 CLIP_TICKS = 300                # 对练片段录 15 秒
 
@@ -116,13 +117,8 @@ def main():
     }
     with open(os.path.join(out_dir, "season.json"), "w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o))
-    tpl = open("season_template.html", encoding="utf-8").read().replace("/*__VIZ__*/", open("viz.js", encoding="utf-8").read())
-    html = tpl.replace("/*__DATA__*/null", json.dumps(data, ensure_ascii=False, separators=(",", ":"),
-                                                      default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o)))
-    out_html = os.path.join("runs", f"season_{args.name}.html")
-    with open(out_html, "w", encoding="utf-8") as fh:
-        fh.write(html)
-    print("赛季观看页:", os.path.abspath(out_html), f"（{time.time() - t0:.0f} 秒）")
+    out_html = build_html(data, os.path.join("runs", f"season_{args.name}.html"))
+    print("赛季观看页:", out_html, f"（{time.time() - t0:.0f} 秒）")
 
 
 if __name__ == "__main__":

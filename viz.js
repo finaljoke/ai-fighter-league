@@ -402,11 +402,13 @@ const VIZ = (() => {
   function rig(body) {
     const B = build(body), H = B.H, reach = body ? body.reach : 0.75, mass = body ? body.mass : 72;
     const arm = 0.36 * H * (1 + 0.8 * (reach - 0.75));
-    return { ...B, armLen: arm, ua: arm * 0.52, fa: arm * 0.48, thigh: 0.245 * H, shin: 0.245 * H, ankle: 0.07,
+    return SKIN.fit(body, { ...B, armLen: arm, ua: arm * 0.52, fa: arm * 0.48, thigh: 0.245 * H, shin: 0.245 * H, ankle: 0.07,
       hipZ: 0.465 * H, spine: 0.3 * H, neckL: 0.045 * H, shHalf: 0.15 + 0.035 * B.mus, hipHalf: 0.085 + 0.002 * (mass - 72),
-      chestD: 0.09 + 0.035 * B.mus, waistD: 0.085 };
+      chestD: 0.09 + 0.035 * B.mus, waistD: 0.085 });
   }
   const rigOf = (rep, k) => (rep._rig || (rep._rig = [rig(rep.bodies[0]), rig(rep.bodies[1])]))[k];
+  // 拳套中心到拳面（打到人的那一面）的距离：画的拳套是圆的就是半径略多一点；皮肤的拳套比宽长，按立绘量的
+  const gloveFront = R => R.gloveTip || R.glove * 1.05;
 
   // 绕着肩膀 S 在 P、Q 两个位置之间过渡：方向按球面插值，离肩膀的远近线性插值。护手从腹前抬到额前（AI 常常只举一帧高位格挡）时，
   // 拳套从身前绕个弧上去，不会擦着肩膀走直线把胳膊折死、肘绕着胳膊乱转
@@ -710,9 +712,9 @@ const VIZ = (() => {
       if (J.def && J.def.D.m === M.PARRY && J.def.D.hand === h) G = parryGlove(rep, k, J.def, tf, J, G, fw);
       for (const Eo of punchesNear(rep._mo[1 - k], tf, 3)) {
         const w = ease(clamp(1 - Math.abs(tf - Eo.t1) / 3, 0, 1));
-        if (Eo.oc === 2 && Eo.tgt === 1 && side === (Eo.left ? -1 : 1)) {        // 身体拳被挡：那一侧的小臂、手肘压下来盖住落点
+        if (Eo.oc === 2 && Eo.tgt === 1 && side === (Eo.left ? -1 : 1)) {        // 身体拳被挡：那一侧的小臂、手肘压下来盖住落点（拳套在落点上方约四分之三个前臂长）
           const K = targetOf(rep, 1 - k, Eo);
-          G = lerp3(G, add3(K.C, [0, 0, 0.22]), w); pole = norm3(lerp3(pole, norm3(sub3(K.C, S)), w));
+          G = lerp3(G, add3(K.C, [0, 0, 0.77 * R.fa]), w); pole = norm3(lerp3(pole, norm3(sub3(K.C, S)), w));
         } else if (Eo.oc === 1 && Eo.tgt === 0) {                                // 头部拳打中：挡在拳路上的护手让开（默认护架没挡住），拳从空当里进去
           const K = targetOf(rep, 1 - k, Eo), away = sub3(G, K.C), d = len3(away);
           if (d < 0.2) G = add3(G, mul3(add3(mul3(norm3(sub3(away, mul3(K.inDir, dot3(away, K.inDir)))), 0.12), [0, 0, -0.08]), w * (1 - d / 0.2)));
@@ -835,7 +837,7 @@ const VIZ = (() => {
       else C = add3(C, mul3(sv, 0.24));
     } else if (E.oc === 3 && E.ev === M.PARRY) C = add3(C, mul3(toA, 0.22));       // 被拍开：在脸前二十来厘米处碰上
     const toC = norm3(sub3(C, S)), inDir = E.typ === 1 ? norm3(add3(mul3(toC, 0.45), mul3(sv, -0.55))) : toC;
-    return { C, T: sub3(C, mul3(inDir, Ra.glove * 1.05)), inDir, side: sv, deflect: sv, zone, gap: short };
+    return { C, T: sub3(C, mul3(inDir, gloveFront(Ra))), inDir, side: sv, deflect: sv, zone, gap: short };
   }
   const targetOf = (rep, k, E) => E._K || (E._K = contactOf(rep, k, E, false));
   // 要够到落点得往前送多少：胳膊伸直还差的那一截（满射程的拳约 20 厘米）
@@ -1213,10 +1215,11 @@ const VIZ = (() => {
     }
   }
 
-  // ---------------------------------------------------------------- 三维皮肤（验证中，页面调了 setSkins 才启用）
+  // ---------------------------------------------------------------- 三维皮肤（页面调了 setSkins 才启用，规范见 docs/角色皮肤规范.md）
   // 有皮肤的角色（tools/build_skin.py 从三视图立绘生成）画成贴了立绘的网格，没有的按体型和配色生成一个素色的。
-  // 网格是沿骨骼一圈圈的截面：段内跟着骨头长短走（骨头长短是模拟定的），头顶、拳套、三角肌这些往外延的按米数走，不跟着拉长。
-  // 两个人放进同一个深度缓冲里画，谁挡谁逐像素按离镜头远近算；投影和 makeCam 一模一样，画完贴回画布，擂台、火花、名牌照旧用 2D 画
+  // 网格是沿骨骼一圈圈的截面：段内跟着骨头长短走，头顶、拳套、三角肌这些往外延的按米数走，不跟着拉长。
+  // 骨长和身体尺寸用立绘量出来的（fit），只有胳膊总长跟着模拟的臂展。比赛（转播机位）和训练馆、开场卡（侧面机位）都走这里：
+  // 两个人放进同一个深度缓冲里画，谁挡谁逐像素按离镜头远近算；投影和 2D 一模一样，画完贴回画布，擂台、器械、火花、名牌照旧用 2D 画
   const SKIN = (() => {
     const skins = {}, meshes = {};
     let on = false, gl = null, cvs = null, prog = null, U = null, failed = false;
@@ -1238,39 +1241,67 @@ const VIZ = (() => {
       else if (v > 1 - blend && k + 1 < n) t = norm3(lerp3(t, d(k + 1), ease((v - 1 + blend) / (2 * blend))));
       return [lerp3(P[k], P[k + 1], v), t];
     }
+    // 有皮肤的角色：骨长和身体尺寸换成从立绘量出来的。胳膊总长不换（跟着模拟的臂展），按立绘里上臂、前臂的比例分；
+    // 骨盆高度让腿留的余量和原来的骨架一样（两脚前后分开 0.22 米站着时，腿离伸直还差同样多，滑步、上步时脚够得着）。
+    // 身高、体重、力量和做皮肤时不一样（身体参数在赛季里会变），长度按身高、粗细按 build 的比例加减
+    function fit(body, R) {
+      const S = on && body && skins[body.id] && skins[body.id].data.rig;
+      if (!S) return R;
+      const ref = build(skins[body.id].data.ref), g = R.H / S.H, legs = (S.thigh + S.shin) * g;
+      const slack = R.thigh + R.shin - Math.hypot(R.hipZ - R.ankle, 0.22);
+      const fac = { len: g, torso: R.chest / ref.chest, arm: R.arm / ref.arm, leg: R.legW / ref.legW, neck: R.neckW / ref.neckW };
+      return { ...R, ua: R.armLen * S.uaFrac, fa: R.armLen * (1 - S.uaFrac), thigh: S.thigh * g, shin: S.shin * g, ankle: S.ankle * g,
+        hipZ: S.ankle * g + Math.sqrt(Math.max(0.04, (legs - slack) ** 2 - 0.22 ** 2)), spine: S.spine * g, neckL: S.neckL * g, headR: S.headR * g,
+        shHalf: S.shHalf * g, hipHalf: S.hipHalf * g, chestD: S.chestD * g * fac.torso, waistD: S.waistD * g * fac.torso,
+        glove: S.glove * g, gloveTip: S.gloveTip * g, skin: fac };
+    }
+    // 截面的粗细跟着体型加减：躯干、胳膊（不含绷带拳套）、腿（不含靴筒）、脖子；头、拳套、脚不变
+    function ringScale(kind, k, v, fac) {
+      if (!fac) return 1;
+      const f = kind === 'torso' ? fac.torso : kind === 'arm' && k < 2 ? fac.arm : kind === 'leg' && !(k >= 1 && v > 0.6) ? fac.leg
+        : kind === 'head' && k <= 0 ? fac.neck : 1;
+      return f * fac.len;
+    }
     // 这一帧各段骨骼的关节点和标架。B：皮肤里头、拳套、脚的固定尺寸
     function frameOf(J, B) {
+      const g = J.R.skin ? J.R.skin.len : 1;
       const spine = norm3(sub3(J.chest, J.pel)), rHip = perp3(sub3(J.hipR, J.hipL), spine), rSh = perp3(sub3(J.shR, J.shL), spine);
-      const hd = norm3(sub3(J.chest, J.head)), Q = add3(J.head, mul3(hd, B.dQ));
-      const ch = { torso: [J.pel, J.chest], head: [J.chest, Q, J.head] };
+      const hd = norm3(sub3(J.chest, J.head)), Q = add3(J.head, mul3(hd, B.dQ * g));
+      const ch = { torso: [J.pel, J.chest], head: [J.chest, Q, J.head] }, up = {};
       for (const [s, sh, h, i] of [['R', J.shR, J.ls > 0 ? 1 : 0, 1], ['L', J.shL, J.ls > 0 ? 0 : 1, 0]]) {
         const E = J.elbows[h], G = J.gloves[h], u = norm3(sub3(G, E));
-        ch['arm' + s] = [sh, E, sub3(G, mul3(u, B.dWr[s])), G, add3(G, mul3(u, B.dTip[s]))];
+        ch['arm' + s] = [sh, E, sub3(G, mul3(u, B.dWr[s] * g)), G, add3(G, mul3(u, B.dTip[s] * g))];
         const hip = s === 'R' ? J.hipR : J.hipL, A = J.ankles[i];
         ch['leg' + s] = [hip, J.knees[i], A];
-        // 脚：踝下面贴着台面（出拳时脚跟拧起来就抬脚跟），朝脚尖的方向
-        const f = [Math.cos(J.footYaw[i]), Math.sin(J.footYaw[i]), 0], heel = J.heels[i], z0 = A[2] - J.R.ankle - heel;
-        ch['foot' + s] = [[A[0] + f[0] * B.heel, A[1] + f[1] * B.heel, z0 + B.zc + heel * 1.5], [A[0] + f[0] * B.toe, A[1] + f[1] * B.toe, z0 + B.zc]];
+        // 脚：踝下面贴着台面（出拳时脚跟拧起来就抬脚跟），朝脚尖的方向；仰面倒下、躺着时脚尖转向上（跪着的膝盖比踝低，不转）
+        const hz = [Math.cos(J.footYaw[i]), Math.sin(J.footYaw[i]), 0], heel = J.heels[i];
+        const a = J.down && J.knees[i][2] > A[2] + 0.05 ? 1.35 * clamp(J.down, 0, 1) : 0;
+        const f = add3(mul3(hz, Math.cos(a)), [0, 0, Math.sin(a)]), fu = sub3([0, 0, Math.cos(a)], mul3(hz, Math.sin(a)));
+        const O = sub3(A, mul3(fu, J.R.ankle + heel));
+        ch['foot' + s] = [add3(O, add3(mul3(f, B.heel * g), mul3(fu, B.zc * g + heel * 1.5))), add3(O, add3(mul3(f, B.toe * g), mul3(fu, B.zc * g)))];
+        up['foot' + s] = fu;
       }
-      return { ch, rHip, rSh, top: [rSh, cross3(spine, rSh), spine], bot: [rHip, cross3(spine, rHip), spine], fwTop: cross3(spine, rSh),
-        face: [Math.cos(J.faceAng), Math.sin(J.faceAng), 0] };
+      return { ch, up, rHip, rSh, top: [rSh, cross3(spine, rSh), spine], bot: [rHip, cross3(spine, rHip), spine], fwTop: cross3(spine, rSh),
+        face: [Math.cos(J.faceAng), Math.sin(J.faceAng), 0], fac: J.R.skin };
     }
     // 一段身体按这一帧的骨骼摆好：每圈截面的中心、标架，再按截面参数放顶点，最后算法线
     function posePart(pt, Fr, blend) {
       const P = Fr.ch[pt.name], n = pt.rings.length, nt = pt.nt, pos = pt.pos, C = [], T = [];
       const limb = pt.kind === 'arm' || pt.kind === 'leg', A = pt.kind === 'arm' ? Fr.top : Fr.bot;
       const w = l => add3(add3(mul3(A[0], l[0]), mul3(A[1], l[1])), mul3(A[2], l[2])), T0 = limb ? w(pt.root.T) : null;
+      // 胳膊、腿根上往外延的那几圈（三角肌顶、大腿根）挂在肩、胯上：方向大体按立绘里的方向（只跟着骨头转四分之一），
+      // 到上臂（大腿）前四成再渐变到骨头方向。跟着骨头转多了，胳膊往前举时三角肌顶会往后上方戳出一个包
+      const Tc = limb ? norm3(lerp3(T0, norm3(sub3(P[1], P[0])), 0.25)) : null, g = Fr.fac ? Fr.fac.len : 1;
       let X, Y, prevT;
       for (let i = 0; i < n; i++) {
-        const [k, v, ox, oy, rx, ry, tw] = pt.rings[i];
-        let [c, t] = chainAt(P, k, v, blend);
-        // 胳膊、腿根上往外延的那几圈（三角肌顶、大腿根）跟着躯干走，按立绘里的方向挂在肩、胯上；
-        // 到骨头上再渐变到骨头的方向（不然胳膊往前举时，三角肌顶会顺着上臂往后上方戳出去一截）
-        if (limb && k < 0) { c = add3(P[0], mul3(T0, v)); t = T0; }
-        else if (limb && k === 0 && v < blend) t = norm3(lerp3(T0, t, ease((v + blend) / (2 * blend))));
+        const [k, v, ox0, oy0, rx0, ry0, tw] = pt.rings[i], sc = ringScale(pt.kind, k, v, Fr.fac);
+        const ox = ox0 * sc, oy = oy0 * sc, rx = rx0 * sc, ry = ry0 * sc;
+        let [c, t] = chainAt(P, k, k < 0 || k >= P.length - 1 ? v * g : v, blend);
+        if (limb && k < 0) { c = add3(P[0], mul3(Tc, v * g)); t = Tc; }
+        else if (limb && k === 0 && v < 0.4) t = norm3(lerp3(Tc, t, ease(v / 0.4)));
         if (pt.kind === 'torso') { X = perp3(lerp3(Fr.rHip, Fr.rSh, tw), t); Y = cross3(t, X); }
         else if (pt.kind === 'head') { Y = perp3(lerp3(Fr.fwTop, Fr.face, tw), t); X = cross3(Y, t); }
-        else if (pt.kind === 'foot') { Y = perp3([0, 0, 1], t); X = cross3(t, Y); }
+        else if (pt.kind === 'foot') { Y = perp3(Fr.up[pt.name], t); X = cross3(t, Y); }
         else if (i === 0) { X = minrot(T0, t, w(pt.root.X)); Y = minrot(T0, t, w(pt.root.Y)); }
         else { X = minrot(prevT, t, X); Y = minrot(prevT, t, Y); }
         prevT = t; C.push(c); T.push(t);
@@ -1343,26 +1374,31 @@ const VIZ = (() => {
 
     const VS = `#version 300 es
 in vec3 aPos; in vec3 aNor; in vec2 aF; in vec2 aS; in vec2 aB; in vec3 aW; in vec3 aCol;
-uniform int uRot; uniform float uCu, uCv, uBase, uR; uniform vec4 uBox; uniform vec2 uSize;
+uniform int uMode, uRot; uniform float uCu, uCv, uBase, uR; uniform vec3 uSide; uniform vec4 uBox; uniform vec2 uSize;
 out vec2 vF; out vec2 vS; out vec2 vB; out vec3 vW; out vec3 vN; out vec3 vCol;
 void main() {
   vec3 p = aPos;
-  float m = uR * 0.5, dx = p.x - m, dy = p.y - m;
-  vec2 q = uRot == 1 ? vec2(m - dy, m + dx) : uRot == 2 ? vec2(m - dx, m - dy) : uRot == 3 ? vec2(m + dy, m - dx) : p.xy;
-  float t = clamp((q.y - uCv) / uR + 0.5, -0.5, 1.5), sc = uBase * (1.1 - 0.25 * t);
-  float sx = uBox.x + uBox.z * 0.5 + (q.x - uCu) * sc, sy = uBox.y + uBox.w * mix(0.95, 0.6, t) - p.z * sc;
-  gl_Position = vec4(sx / uSize.x * 2.0 - 1.0, 1.0 - sy / uSize.y * 2.0, clamp((q.y - uCv) / (uR * 2.0 + 4.0), -0.99, 0.99), 1.0);
+  float sx, sy, z;
+  if (uMode == 1) {             // 侧面机位（sideCam）：训练馆、开场卡
+    sx = uSide.x + p.x * uSide.z; sy = uSide.y - p.z * uSide.z - p.y * uSide.z * 0.12; z = clamp(p.y / 8.0, -0.99, 0.99);
+  } else {                      // 转播机位（makeCam）
+    float m = uR * 0.5, dx = p.x - m, dy = p.y - m;
+    vec2 q = uRot == 1 ? vec2(m - dy, m + dx) : uRot == 2 ? vec2(m - dx, m - dy) : uRot == 3 ? vec2(m + dy, m - dx) : p.xy;
+    float t = clamp((q.y - uCv) / uR + 0.5, -0.5, 1.5), sc = uBase * (1.1 - 0.25 * t);
+    sx = uBox.x + uBox.z * 0.5 + (q.x - uCu) * sc; sy = uBox.y + uBox.w * mix(0.95, 0.6, t) - p.z * sc; z = clamp((q.y - uCv) / (uR * 2.0 + 4.0), -0.99, 0.99);
+  }
+  gl_Position = vec4(sx / uSize.x * 2.0 - 1.0, 1.0 - sy / uSize.y * 2.0, z, 1.0);
   vF = aF; vS = aS; vB = aB; vW = aW; vN = aNor; vCol = aCol;
 }`;
     const FS = `#version 300 es
 precision highp float;
 in vec2 vF; in vec2 vS; in vec2 vB; in vec3 vW; in vec3 vN; in vec3 vCol;
-uniform sampler2D uT; uniform bool uTex; uniform vec3 uLight;
+uniform sampler2D uT; uniform bool uTex; uniform vec3 uLight; uniform float uFlash;
 out vec4 o;
 void main() {
   float d = max(dot(normalize(vN), uLight), 0.0);
   vec3 base = uTex ? (texture(uT, vF).rgb * vW.x + texture(uT, vS).rgb * vW.y + texture(uT, vB).rgb * vW.z) / max(vW.x + vW.y + vW.z, 1e-3) : vCol;
-  o = vec4(base * (uTex ? 0.8 + 0.3 * d : 0.5 + 0.6 * d), 1.0);
+  o = vec4(mix(base * (uTex ? 0.8 + 0.3 * d : 0.5 + 0.6 * d), vec3(1.0), uFlash), 1.0);
 }`;
     function init() {
       if (gl || failed) return !!gl;
@@ -1373,7 +1409,7 @@ void main() {
       prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(prog);
       if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
       U = {};
-      for (const n of ['uRot', 'uCu', 'uCv', 'uBase', 'uR', 'uBox', 'uSize', 'uT', 'uTex', 'uLight']) U[n] = gl.getUniformLocation(prog, n);
+      for (const n of ['uMode', 'uRot', 'uCu', 'uCv', 'uBase', 'uR', 'uSide', 'uBox', 'uSize', 'uT', 'uTex', 'uLight', 'uFlash']) U[n] = gl.getUniformLocation(prog, n);
       return true;
     }
     // 网格上传到显卡：位置、法线每帧更新，贴图坐标、权重、颜色不变
@@ -1423,6 +1459,7 @@ void main() {
       if (!meshes[key]) meshes[key] = upload(skins[id] ? { ...skins[id].data, id } : plainMesh(R, look(id)));
       return meshes[key];
     }
+    // cam：makeCam（转播机位，box 是画面区域）或 sideCam（侧面机位，box 是整张画布）
     function draw(c, cam, Js, ids, box) {
       if (!on || !init()) return false;
       const w = Math.round(box[2]), h = Math.round(box[3]);
@@ -1431,15 +1468,17 @@ void main() {
       gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.CULL_FACE);
       gl.useProgram(prog);
       const vd = [[0, 1], [1, 0], [0, -1], [-1, 0]][cam.rot];                   // 机位看过去的方向（世界坐标）
-      gl.uniform1i(U.uRot, cam.rot); gl.uniform1f(U.uCu, cam.cu); gl.uniform1f(U.uCv, cam.cv); gl.uniform1f(U.uBase, cam.base); gl.uniform1f(U.uR, SIM.RING);
+      gl.uniform1i(U.uMode, cam.side ? 1 : 0); gl.uniform3fv(U.uSide, cam.side || [0, 0, 1]);
+      gl.uniform1i(U.uRot, cam.rot); gl.uniform1f(U.uCu, cam.cu || 0); gl.uniform1f(U.uCv, cam.cv || 0); gl.uniform1f(U.uBase, cam.base || 1); gl.uniform1f(U.uR, SIM.RING);
       gl.uniform4f(U.uBox, 0, 0, box[2], box[3]); gl.uniform2f(U.uSize, w, h);
       gl.uniform3fv(U.uLight, norm3([-vd[0] * 0.7 - vd[1] * 0.3, -vd[1] * 0.7 + vd[0] * 0.3, 0.65])); gl.uniform1i(U.uT, 0);
-      for (let k = 0; k < 2; k++) {
+      for (let k = 0; k < Js.length; k++) {
         const mesh = meshOf(ids[k], Js[k].R), Fr = frameOf(Js[k], mesh.bind);
         gl.uniform1i(U.uTex, mesh.tex ? 1 : 0);
         if (mesh.tex) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, mesh.tex); }
         for (const pt of mesh.parts) {
           posePart(pt, Fr, mesh.blend);
+          gl.uniform1f(U.uFlash, pt.kind === 'head' && Js[k].flash ? 0.25 : 0);    // 头部挨了重拳那一下脸上一白（同 2D 的 flash）
           gl.bindVertexArray(pt.vao);
           gl.bindBuffer(gl.ARRAY_BUFFER, pt.bPos); gl.bufferSubData(gl.ARRAY_BUFFER, 0, pt.pos);
           gl.bindBuffer(gl.ARRAY_BUFFER, pt.bNor); gl.bufferSubData(gl.ARRAY_BUFFER, 0, pt.nor);
@@ -1450,16 +1489,18 @@ void main() {
       c.drawImage(cvs, box[0], box[1], box[2], box[3]);
       return true;
     }
-    // skins：{ 角色 id: build_skin.py 生成的数据 }。贴图是 data URI，加载完才算准备好（导出视频先等 ready）
+    // skins：{ 角色 id: build_skin.py 生成的数据 }。贴图是 data URI，加载完才算准备好（导出视频先等 ready）。
+    // 核对工具在 node 里跑（没有 Image）：只用骨长和身体尺寸（fit），不画
     function set(list) {
       for (const [id, data] of Object.entries(list || {})) {
-        const img = new Image(); img.src = data.tex;
+        const img = typeof Image !== 'undefined' && data.tex ? new Image() : null;
+        if (img) img.src = data.tex;
         skins[id] = { data, img };
       }
       on = true;
     }
-    const ready = () => Object.values(skins).every(s => s.img.complete && s.img.naturalWidth > 0);
-    return { set, ready, draw };
+    const ready = () => Object.values(skins).every(s => !s.img || (s.img.complete && s.img.naturalWidth > 0));
+    return { set, ready, draw, fit };
   })();
 
   // ---------------------------------------------------------------- 一帧比赛画面（不含转播包装）
@@ -1754,7 +1795,7 @@ void main() {
   // ---------------------------------------------------------------- 训练馆、开场卡里的三维小人：和比赛同一副骨骼、同一套画法，按训练项目摆姿势
   // 训练馆的镜头：侧面平视。(cx, floor) 是世界原点在画面上的位置，s 是每米多少像素；y 往里是纵深（远一点画得稍高一点）
   function sideCam(cx, floor, s) {
-    return { rot: 0, P: (x, y, z = 0) => [cx + x * s, floor - z * s - y * s * 0.12, s], W: (x, y) => [x, y] };
+    return { rot: 0, side: [cx, floor, s], P: (x, y, z = 0) => [cx + x * s, floor - z * s - y * s * 0.12, s], W: (x, y) => [x, y] };
   }
   // 摆一个姿势。o 里的位置是局部坐标 [前, 左, 上]（米，左右按解剖学），世界里站在 (x, y)、朝 th：
   //   lift 整个人离地（跳绳）；crouch、pitch、roll、alpha（侧身，+ = 前肩在前）、pelF、pelZ：骨盆；headF：头往前探
@@ -1820,6 +1861,7 @@ void main() {
       const [sx, sy, sc] = cam.P(J.pel[0], J.pel[1], 0);
       c.fillStyle = 'rgba(0,0,0,0.3)'; c.beginPath(); c.ellipse(sx, sy, 0.38 * sc, 0.07 * sc, 0, 0, Math.PI * 2); c.fill();
     }
+    if (SKIN.draw(c, cam, figs.map(q => q.J), figs.map(q => q.id), [0, 0, c.canvas.width, c.canvas.height])) return;
     (figs.length === 2 ? drawOrder(cam, figs.map(q => q.J), figs.map(q => q.id), c) : rigParts(c, cam, figs[0].J, figs[0].id)).forEach(q => q.f());
   }
 
@@ -1961,7 +2003,7 @@ void main() {
           c.strokeStyle = '#9aa0aa'; c.lineWidth = 2; c.beginPath(); c.moveTo(cx + 0.55 * s, y0); c.lineTo(cx + (0.55 + sw) * s, floor - 1.85 * s); c.stroke();
           c.fillStyle = '#8b2c22'; c.strokeStyle = '#14161c'; c.beginPath(); c.roundRect(cx + (0.38 + sw) * s, floor - 1.85 * s, 0.36 * s, 1.15 * s, 0.14 * s); c.fill(); c.stroke();
           c.fillStyle = 'rgba(255,255,255,0.6)'; c.fillRect(cx + (0.38 + sw) * s, floor - 1.55 * s, 0.36 * s, 0.05 * s);
-          drawFigures(c, cam, [me({ x: -0.3, punch: { p: k, e, to: [0.38 + sw - R.glove * 1.05, 0, tz] } })]);
+          drawFigures(c, cam, [me({ x: -0.3, punch: { p: k, e, to: [0.38 + sw - gloveFront(R), 0, tz] } })]);
         } else {
           // 教练举着手靶迎着这一拳，打到时手靶被打得往后让一点
           const Rc = rig(null), coach = trainPose(Rc, { x: 0.85, th: Math.PI, pitch: 0.08 - 0.05 * e,

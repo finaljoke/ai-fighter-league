@@ -3,7 +3,7 @@
 
     py -X utf8 tools/viz_check.py            # 生成 runs/viz_check/*.json，再跑 node tools/check_viz.mjs
     py -X utf8 tools/viz_check.py --page     # 另外拼一个观看页 runs/viz_check.html，能逐个场景看画面
-    py -X utf8 tools/viz_check.py --page --skin   # 观看页里的人换成三维皮肤（characters/<id>.skin.json，见 tools/build_skin.py），出 runs/viz_check_skin.html
+    py -X utf8 tools/viz_check.py --page --skin   # 按三维皮肤的骨长核对，核对页里的人换成三维皮肤（characters/<id>.skin.json），出 runs/viz_check_skin.html
 
 场景用标准回放档重算（boxing_league.resimulate），和观看页走的是同一条路。
 """
@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import boxing as B                      # noqa: E402
 import boxing_league as BL              # noqa: E402
 import schools as SC                    # noqa: E402
+import skins as SK                      # noqa: E402
 from make_episode import body_of        # noqa: E402
 
 OUT = os.path.join("runs", "viz_check")
@@ -178,7 +179,7 @@ def main():
         print(f"{name}：{len(frames)} 帧")
     if args.page:
         page(cards, args.skin)
-    sys.exit(subprocess.call(["node", os.path.join("tools", "check_viz.mjs"), *paths]))
+    sys.exit(subprocess.call(["node", os.path.join("tools", "check_viz.mjs"), *(["--skin"] if args.skin else []), *paths]))
 
 
 def page(cards, skin=False):
@@ -217,15 +218,8 @@ window.EXPORT = { items: () => D.cards.map((cd, i) => ({ i, title: cd.title, dur
 (function first() { if (VIZ.skinsReady()) draw(); else setTimeout(first, 50); })();
 </script>"""
     viz = open("viz.js", encoding="utf-8").read()
-    skins = {}
-    if skin:
-        for cd in cards:
-            for fid in cd["fighters"]:
-                p = os.path.join("characters", f"{fid}.skin.json")
-                if fid not in skins and os.path.exists(p):
-                    skins[fid] = json.load(open(p, encoding="utf-8"))
-        print("三维皮肤：", "、".join(skins) or "没有（其余角色画成素色三维）")
-    data = json.dumps({"sim": B.viz_sim(), "cards": cards, "skins": skins if skin else None}, ensure_ascii=False, separators=(",", ":"))
+    skins = SK.load([fid for cd in cards for fid in cd["fighters"]], skin)
+    data = json.dumps({"sim": B.viz_sim(), "cards": cards, "skins": skins}, ensure_ascii=False, separators=(",", ":"))
     out = os.path.join("runs", "viz_check_skin.html" if skin else "viz_check.html")
     open(out, "w", encoding="utf-8").write(html.replace("/*__VIZ__*/", viz).replace("/*__DATA__*/null", data))
     print("核对页：", os.path.abspath(out))

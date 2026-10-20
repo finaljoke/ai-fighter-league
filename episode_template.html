@@ -28,13 +28,16 @@
 <script>
 const EP = JSON.parse(document.getElementById('data').textContent);
 VIZ.setSim(EP.sim);
+if (EP.skins) VIZ.setSkins(EP.skins);
 const { clamp, lerp, easeOut } = VIZ;
 const ease = x => VIZ.ease(clamp(x, 0, 1));
 const IMG = {};
 window.EPISODE_READY = false;
-Promise.all(Object.entries(EP.portraits).map(([id, src]) => new Promise(res => {
+// 立绘和三维皮肤的贴图都加载完才开始画（导出视频先等 EXPORT.ready）
+const skinsLoaded = new Promise(res => (function wait() { if (VIZ.skinsReady()) res(); else setTimeout(wait, 30); })());
+Promise.all([skinsLoaded, ...Object.entries(EP.portraits).map(([id, src]) => new Promise(res => {
   const im = new Image(); im.onload = () => { IMG[id] = im; res(); }; im.onerror = res; im.src = src;
-}))).then(() => { window.EPISODE_READY = true; render(); });
+}))]).then(() => { window.EPISODE_READY = true; render(); });
 
 const CH = EP.chars;                       // id → 角色卡
 const NAME = id => CH[id].name, NICK = id => CH[id].nick, ACC = id => VIZ.accent(id);

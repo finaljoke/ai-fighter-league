@@ -114,6 +114,7 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
 <script>
 const D = JSON.parse(document.getElementById('data').textContent);
 VIZ.setSim(D.sim);
+if (D.skins) VIZ.setSkins(D.skins);
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const IDS = ['A', 'B'];
@@ -285,6 +286,7 @@ window.addEventListener('keydown', e => { if (e.key === 'ArrowRight') select(SEL
 
 // ---------------------------------------------------------------- 导出视频用的接口（tools/export_video.mjs 调用）
 window.EXPORT = {
+  ready: () => VIZ.skinsReady(),                 // 三维皮肤的贴图加载完再导出
   items: () => DAYS.map((d, i) => ({ i, type: d.type, title: d.type === 'fight' ? d.fight.title : `第 ${d.row.day} 天`, dur: itemDuration(d) })),
   frame: (i, t, w, h) => {
     const oc = window._oc || (window._oc = document.createElement('canvas'));

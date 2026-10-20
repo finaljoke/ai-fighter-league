@@ -1,9 +1,13 @@
-// 小人模型体检：node tools/audit_rig.mjs（先跑 py -X utf8 tools/viz_check.py 生成 runs/viz_check/*.json）
+// 小人模型体检：node tools/audit_rig.mjs [--skin]（先跑 py -X utf8 tools/viz_check.py 生成 runs/viz_check/*.json）
+// --skin：有三维皮肤的角色按皮肤的骨长和身体尺寸体检
 // 每 1/20 帧采样所有核对场景和第 0 季的比赛，量：关节跳变、骨长、拳套和脚够不够得着、膝盖手肘反弯、自己的拳套陷进自己身体、
 // 两个人互相穿插、头部画法来回跳。只报数和例子，不判对错：有的是模拟本身的行为（AI 只举一帧架、两人贴到 0.6 米），见 docs/赛季与训练场规格.md
 import { readFileSync, existsSync } from 'node:fs';
 const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 const VIZ = new Function(readFileSync(ROOT + 'viz.js', 'utf8') + ';return VIZ;')();
+const SKIN = process.argv.includes('--skin');
+const skinsOf = bodies => Object.fromEntries(bodies.map(b => [b.id, ROOT + `characters/${b.id}.skin.json`]).filter(([, p]) => existsSync(p))
+  .map(([id, p]) => [id, { ...JSON.parse(readFileSync(p, 'utf8')), tex: null, parts: [] }]));
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], len = a => Math.hypot(a[0], a[1], a[2]);
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const segDist = (p, a, b) => { const ab = sub(b, a), t = Math.max(0, Math.min(1, dot(sub(p, a), ab) / (dot(ab, ab) || 1))); return len(sub(p, [a[0] + ab[0] * t, a[1] + ab[1] * t, a[2] + ab[2] * t])); };
@@ -40,6 +44,7 @@ const ctxOf = (rep, k, tf) => {
 
 for (const set of sets) {
   VIZ.setSim(set.sim);
+  if (SKIN) VIZ.setSkins(skinsOf(set.card.bodies));
   const rep = VIZ.prep({ frames: set.card.frames, bodies: set.card.bodies });
   const n = rep.frames.length, Rg = [0, 1].map(k => VIZ.rigOf(rep, k));
   let prev = null, prevOrder = null, prevMode = [null, null], modeLast = [[], []];

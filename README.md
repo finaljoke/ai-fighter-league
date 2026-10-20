@@ -53,9 +53,11 @@ py -X utf8 tools/viz_check.py --page                        # 另出一个能逐
 node tools/preview_frames.mjs runs/viz_check.html 截图目录 "0@3.45@1.8"   # 条目@秒@放大倍数，放大只有核对页认
 py -X utf8 tools/enrich_frames.py                           # 旧回放存好的帧补上画面字段（用 git 里当时那一版规则重算）
 node tools/audit_rig.mjs                                    # 小人体检：关节跳变、够不够得着、穿插、遮挡闪烁，报数和例子
-# 三维皮肤（验证中）：三视图立绘做成网格，关节点标在 characters/<id>.rig.json；要装 pillow 和 scipy
-py -X utf8 tools/build_skin.py LJ --debug 核对目录           # 生成 characters/LJ.skin.json，核对目录里是截面描回立绘的图
-py -X utf8 tools/viz_check.py --page --skin                 # 核对页里的人换成三维皮肤：runs/viz_check_skin.html
+# 三维皮肤：三视图立绘做成网格（规范见 docs/角色皮肤规范.md），关节点标在 characters/<id>.rig.json；要装 pillow 和 scipy
+py -X utf8 tools/build_skin.py LJ GY --debug 核对目录        # 生成 characters/<id>.skin.json，核对目录里是截面描回立绘的图
+py -X utf8 tools/viz_check.py --page --skin                 # 按皮肤的骨长逐拳核对，核对页 runs/viz_check_skin.html
+node tools/audit_rig.mjs --skin                             # 按皮肤的骨长体检
+# 试播集、赛季观看页有皮肤就自动用三维皮肤，加 --no-skin 画回 2D 小人
 ```
 
 导出视频要先在 `tools/` 下 `npm install`（只装 puppeteer-core，用本机的 Edge），本机要有 ffmpeg，Python 要装 numpy 和 edge-tts。
@@ -74,7 +76,8 @@ py -X utf8 tools/viz_check.py --page --skin                 # 核对页里的人
 | `make_episode.py` + `episode_template.html` | 试播集：片头、人物介绍、成长片段（出生和首战前用 `train.py --record` 存档节点另打的录像；中间几件大事是里程碑的版本重演：训练里那一场没录像，用当时的出招网络按当时的对手重打到同样的事发生，第一次找到的那场存进 `runs/<run>/milestone_reenact.json`，以后只读存档）、首战（只打一次存档，结果不重来）、片尾。人设和立绘读本地 `characters/`，不进仓库 |
 | `tools/preview_frames.mjs` | 抽几帧截图看画面，不用导整片 |
 | `tools/make_audio.py` | 按声音事件表合成音轨（音效、观众、训练节拍、解说），事件表由 `viz.js` 从同一条时间线算出 |
-| `tools/build_skin.py` | 三维皮肤（验证中）：从三视图量出每段身体沿骨骼一圈圈的截面，算出每个顶点在正面、侧面、背面上的贴图坐标。`viz.js` 的 `SKIN` 每帧按骨骼摆好截面、用 WebGL 画，页面调了 `setSkins` 才启用，目前只有比赛画面用；没有皮肤的角色画成素色三维 |
+| `tools/build_skin.py` | 三维皮肤：从三视图量出每段身体沿骨骼一圈圈的截面、骨长和身体尺寸，算出每个顶点在正面、侧面、背面上的贴图坐标。`viz.js` 的 `SKIN` 每帧按骨骼摆好截面、用 WebGL 画（比赛、训练馆、开场卡都是），没有皮肤的角色画成素色三维。规范、比例约定、核对办法见 `docs/角色皮肤规范.md` |
+| `skins.py` | 页面生成时按出场角色读 `characters/<id>.skin.json` |
 
 ## 一维原型
 

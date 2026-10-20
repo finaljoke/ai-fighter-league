@@ -14,6 +14,7 @@ import numpy as np
 import bodies as BD
 import boxing as B
 import boxing_league as BL
+import skins as SK
 from analyze import load_run
 from boxing_bots import BoxingSparring
 from nets import load_policy
@@ -253,6 +254,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", required=True, help="正史训练档，分几段接着练的用逗号隔开，按先后顺序")
     ap.add_argument("--out", default=os.path.join("runs", "episode_pilot.html"))
+    ap.add_argument("--no-skin", action="store_true", help="不用三维皮肤（characters/<id>.skin.json），画回 2D 小人")
     args = ap.parse_args()
     runs = [load_run(r) for r in args.run.split(",")]
     run = runs[-1]                                              # 首战用最后一段练出来的最新版本
@@ -302,6 +304,7 @@ def main():
         "fight_sub": f"红角 {nm['LJ']} 对 蓝角 {nm['GY']} · 3 回合", "tale": tale, "stats": st,
         "outro_text": outro, "outro_voice": voice,
         "next_text": "下集：训练营——输的人，会怎么变？" if r["winner"] else "下集：训练营——谁先变强？",
+        "skins": SK.load(ORDER, not args.no_skin),
     }
     tpl = open("episode_template.html", encoding="utf-8").read().replace("/*__VIZ__*/", open("viz.js", encoding="utf-8").read())
     html = tpl.replace("/*__DATA__*/null", json.dumps(data, ensure_ascii=False, separators=(",", ":"),

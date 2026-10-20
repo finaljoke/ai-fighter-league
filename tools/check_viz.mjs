@@ -1,19 +1,25 @@
-// 画面和模拟对不对得上：node tools/check_viz.mjs <比赛.json> [更多.json]
+// 画面和模拟对不对得上：node tools/check_viz.mjs [--skin] <比赛.json> [更多.json]
+// --skin：有三维皮肤的角色（characters/<id>.skin.json）按皮肤的骨长和身体尺寸核对，和皮肤画面一致
 // json 是 {sim: boxing.viz_sim(), card: {bodies, frames}}，由 tools/viz_check.py 生成。逐拳核对"所见即模拟"：
 //   打中：结算那一帧拳套正好贴在对手身上（头部拳贴着头）
 //   被挡：拳套停在对手的护手（或小臂、肩）上
 //   被躲开：拳套到了头原来的位置，头已经不在那里
 //   打空：射程不够的，拳套离对手还差模拟算出来的那一截
 //   拳到之前一帧还没到；脚不交叉；胳膊没有为了够到落点被拉长
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 const VIZ = new Function(readFileSync(new URL('../viz.js', import.meta.url), 'utf8') + ';return VIZ;')();
+// 出场角色的皮肤（只要骨长和身体尺寸，贴图不读）
+const skinsOf = bodies => Object.fromEntries(bodies.map(b => [b.id, new URL(`../characters/${b.id}.skin.json`, import.meta.url)])
+  .filter(([, u]) => existsSync(u)).map(([id, u]) => { const s = JSON.parse(readFileSync(u, 'utf8')); return [id, { ...s, tex: null, parts: [] }]; }));
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], len = a => Math.hypot(a[0], a[1], a[2]);
 const OC = ['', '打中', '被挡', '被躲开', '打空'];
 let fails = 0;
 const check = (ok, msg) => { if (!ok) { fails++; if (fails <= 40) console.log('  ✗ ' + msg); } return ok; };
-for (const path of process.argv.slice(2)) {
+const args = process.argv.slice(2), SKIN = args.includes('--skin');
+for (const path of args.filter(a => a !== '--skin')) {
   const D = JSON.parse(readFileSync(path, 'utf8'));
   VIZ.setSim(D.sim);
+  if (SKIN) VIZ.setSkins(skinsOf(D.card.bodies));
   const rep = VIZ.prep({ frames: D.card.frames, bodies: D.card.bodies });
   const n = rep.frames.length, stat = { 1: [], 2: [], 3: [], 4: [] }, lunge = [];
   let early = 0, stretched = 0, total = 0;
@@ -28,7 +34,7 @@ for (const path of process.argv.slice(2)) {
       const tag = `${k}号 第${E.t1}帧 ${D.sim.actions[7 + E.p]} ${OC[E.oc]}`;
       if (!check(off < 0.012, `${tag}：拳套离该在的位置 ${(off * 100).toFixed(1)} 厘米（胳膊够不着）`)) stretched++;
       lunge.push(E.lunge);
-      const head = len(sub(G, Jd.head)) - Rd.headR - Ra.glove;      // 拳套表面到头表面
+      const head = len(sub(G, Jd.head)) - Rd.headR - (Ra.gloveTip || Ra.glove);      // 拳面到头表面（皮肤的拳套比宽长，按拳面算）
       if (E.oc === 1 && E.tgt === 0) { stat[1].push(head); check(head < 0.04 && head > -0.06, `${tag}：打中了头，拳套和头隔着 ${(head * 100).toFixed(1)} 厘米`); }
       if (E.oc === 2) {
         // 头部拳挡在拳套（或肩卷的前肩）上，身体拳挡在小臂、手肘上：量拳套到对方两条小臂（肘到拳套那一段）的距离
