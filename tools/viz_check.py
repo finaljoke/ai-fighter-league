@@ -3,6 +3,7 @@
 
     py -X utf8 tools/viz_check.py            # 生成 runs/viz_check/*.json，再跑 node tools/check_viz.mjs
     py -X utf8 tools/viz_check.py --page     # 另外拼一个观看页 runs/viz_check.html，能逐个场景看画面
+    py -X utf8 tools/viz_check.py --page --skin   # 观看页里的人换成三维皮肤（characters/<id>.skin.json，见 tools/build_skin.py），出 runs/viz_check_skin.html
 
 场景用标准回放档重算（boxing_league.resimulate），和观看页走的是同一条路。
 """
@@ -158,6 +159,7 @@ def real_match():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--page", action="store_true")
+    ap.add_argument("--skin", action="store_true")
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     recs = scenarios()
@@ -175,11 +177,11 @@ def main():
         cards.append(card)
         print(f"{name}：{len(frames)} 帧")
     if args.page:
-        page(cards)
+        page(cards, args.skin)
     sys.exit(subprocess.call(["node", os.path.join("tools", "check_viz.mjs"), *paths]))
 
 
-def page(cards):
+def page(cards, skin=False):
     """把场景拼成一个能逐个看的观看页（用 season 观看页的模板会牵扯训练营数据，这里只要比赛画面）。"""
     html = """<!doctype html><meta charset="utf-8"><title>画面核对</title>
 <style>body{margin:0;background:#111;color:#ddd;font:14px system-ui}#bar{padding:8px}canvas{display:block;width:100%;max-width:1280px}</style>
@@ -189,6 +191,7 @@ def page(cards):
 <script>/*__VIZ__*/</script><script>
 const D = /*__DATA__*/null;
 VIZ.setSim(D.sim);
+if (D.skins) VIZ.setSkins(D.skins);
 const cv = document.getElementById('cv'), c = cv.getContext('2d'), sel = document.getElementById('sel'), tr = document.getElementById('t');
 D.cards.forEach((cd, i) => { const o = document.createElement('option'); o.value = i; o.textContent = cd.title; sel.appendChild(o); });
 let tf = 0, playing = false, last = 0;
@@ -210,12 +213,20 @@ window.EXPORT = { items: () => D.cards.map((cd, i) => ({ i, title: cd.title, dur
     const { cam } = VIZ.drawBoutFrame(off.getContext('2d'), cd, tf, [0, 0, w * z, h * z], { ids: cd.fighters, labels: cd.fighters, hud: false });
     const f = cd.frames[Math.floor(tf)].f, p = cam.P((f[0][0] + f[1][0]) / 2, (f[0][1] + f[1][1]) / 2, 1.0);
     c.fillStyle = '#000'; c.fillRect(0, 0, w, h); c.drawImage(off, w / 2 - p[0], h * 0.55 - p[1]); return cv.toDataURL('image/jpeg', 0.9); },
-  audio: () => [] };
-draw();
+  audio: () => [], ready: () => VIZ.skinsReady() };
+(function first() { if (VIZ.skinsReady()) draw(); else setTimeout(first, 50); })();
 </script>"""
     viz = open("viz.js", encoding="utf-8").read()
-    data = json.dumps({"sim": B.viz_sim(), "cards": cards}, ensure_ascii=False, separators=(",", ":"))
-    out = os.path.join("runs", "viz_check.html")
+    skins = {}
+    if skin:
+        for cd in cards:
+            for fid in cd["fighters"]:
+                p = os.path.join("characters", f"{fid}.skin.json")
+                if fid not in skins and os.path.exists(p):
+                    skins[fid] = json.load(open(p, encoding="utf-8"))
+        print("三维皮肤：", "、".join(skins) or "没有（其余角色画成素色三维）")
+    data = json.dumps({"sim": B.viz_sim(), "cards": cards, "skins": skins if skin else None}, ensure_ascii=False, separators=(",", ":"))
+    out = os.path.join("runs", "viz_check_skin.html" if skin else "viz_check.html")
     open(out, "w", encoding="utf-8").write(html.replace("/*__VIZ__*/", viz).replace("/*__DATA__*/null", data))
     print("核对页：", os.path.abspath(out))
 
