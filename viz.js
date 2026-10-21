@@ -78,16 +78,18 @@ const VIZ = (() => {
 
   // ---------------------------------------------------------------- 画头
   // psi 是脸朝向在画面里的角度：0 朝右、π 朝左、−π/2 正对镜头、π/2 背对镜头。五官按在头上的方位角投影，转到背面的不画
+  // 头发：侧面按发型画，正面、背面画成发顶（tools/audit_rig.mjs 按这个判头部画法来回跳）
+  const hairView = psi => Math.sin(psi) > 0.9 ? '背面' : Math.abs(Math.cos(psi)) > 0.3 ? (Math.cos(psi) >= 0 ? '侧面右' : '侧面左') : '正面';
   function drawHead3(c, hx, hy, r, psi, L, face, lw, flash) {
     const ink = '#14161c', cs = Math.cos(psi), sn = Math.sin(psi), dir = cs >= 0 ? 1 : -1;
     const vis = az => Math.sin(psi + az) < 0.2, ax = (az, k) => hx + Math.cos(psi + az) * r * k;
     c.fillStyle = flash ? '#ffffff' : (face.tilt ? mixHex(L.skin, '#e0503a', 0.45) : L.skin);
     c.strokeStyle = ink; c.lineWidth = lw;
     c.beginPath(); c.ellipse(hx, hy, r * 0.95 * (face.jaw || 1), r, 0, 0, Math.PI * 2); c.fill(); c.stroke();
-    // 头发：侧面按发型画，正面、背面画成发顶
-    if (sn > 0.9) hairFront(c, hx, hy, r, L, true);
-    else if (Math.abs(cs) > 0.3) hairProfile(c, hx, hy, r, dir, L);
-    else hairFront(c, hx, hy, r, L, false);
+    const hv = hairView(psi);
+    if (hv === '背面') hairFront(c, hx, hy, r, L, true);
+    else if (hv === '正面') hairFront(c, hx, hy, r, L, false);
+    else hairProfile(c, hx, hy, r, dir, L);
     // 耳朵
     c.fillStyle = shade(L.skin, -0.1);
     for (const az of [Math.PI / 2, -Math.PI / 2]) if (vis(az)) { c.beginPath(); c.ellipse(ax(az, 0.82) - cs * r * 0.15, hy + r * 0.05, r * 0.18, r * 0.26, 0, 0, Math.PI * 2); c.fill(); }
@@ -688,7 +690,11 @@ const VIZ = (() => {
         head, head, R.headR + R.glove * 0.75), pel, chest, R.chestD + R.glove * 0.8);                       // 拳套贴着脸、贴着肚子，不陷进去
       const S = shRole[h], v2 = sub3(G, S), d = len3(v2);
       if (d > reach) G = add3(S, mul3(v2, reach / d));                                                    // 转腰把肩膀带走时，手跟着收回来，胳膊不拉直
-      return outside(G, S, S, 0.18);                                                                      // 胳膊折不到拳套贴着自己肩膀：从肩膀往外推开
+      // 胳膊折不到拳套贴着自己肩膀：推到离肩 0.18 米处，离得越近越往肩膀前方偏里、偏下推（胳膊折到底时拳在胸口前、往下巴那边）。
+      // 不按肩→拳套的方向推：贴身收到脸边、累了手往下掉、肩卷抬起前肩时，高位格挡、护体的目标点会落在肩关节上，
+      // 那个方向只有几毫米长，肩膀一动就整圈乱转，拳套绕着肩膀甩；往上推则拳套到了肩膀正上方，肘往哪边弯定不下来
+      const gap = 0.18 - d;
+      return gap <= 0 ? G : add3(S, mul3(norm3(add3(v2, Wv(0.8 * gap, -0.4 * gap * (h === 0 ? ls : -ls), -0.4 * gap))), 0.18));
     };
     const guard = [0, 1].map(h => polar(shRole[h], polar(shRole[h], place(gF[0].gl[h], h), place(gF[1].gl[h], h), pu),
       polar(shRole[h], place(gG[0].gl[h], h), place(gG[1].gl[h], h), pu), a));
@@ -717,8 +723,8 @@ const VIZ = (() => {
           const K = targetOf(rep, 1 - k, Eo);
           G = lerp3(G, add3(K.C, [0, 0, 0.77 * R.fa]), w); pole = norm3(lerp3(pole, norm3(sub3(K.C, S)), w));
         } else if (Eo.oc === 1 && Eo.tgt === 0) {                                // 头部拳打中：挡在拳路上的护手让开（默认护架没挡住），拳从空当里进去
-          const K = targetOf(rep, 1 - k, Eo), away = sub3(G, K.C), d = len3(away);
-          if (d < 0.2) G = add3(G, mul3(add3(mul3(norm3(sub3(away, mul3(K.inDir, dot3(away, K.inDir)))), 0.12), [0, 0, -0.08]), w * (1 - d / 0.2)));
+          const K = targetOf(rep, 1 - k, Eo), d = len3(sub3(G, K.C));
+          if (d < 0.2) G = add3(G, mul3(add3(mul3(asideOf(rep, k, Eo, K, side, out), 0.12), [0, 0, -0.08]), w * (1 - d / 0.2)));
         }
       }
       if (J.cw > 0 && Jo) {                          // 缠抱：手搭到对方同一侧的肩背上（够得着的地方），抱上去、分开都是渐变的
@@ -740,6 +746,17 @@ const VIZ = (() => {
       J.gloves[h] = q.G; J.elbows[h] = q.E; J.gloveT[h] = G;
     }
     return J;
+  }
+  // 头部拳打中时护手往拳路哪一侧让：按拳到的那一刻这只手的护手在拳路哪一侧定，整个让开的过程都往这边。
+  // 每帧按当时在哪一侧算的话，护手横穿拳路的那一下方向整个反过来，拳套从拳路一边跳到另一边。side：+1 左手、−1 右手
+  function asideOf(rep, k, E, K, side, out) {
+    const memo = E._aside || (E._aside = {});
+    if (!memo[side]) {
+      const J1 = bodyPose(rep, E.t1, k, { noDown: true }), off = sub3(J1.guard[(side > 0) === (J1.ls > 0) ? 0 : 1], K.C);
+      const p = sub3(off, mul3(K.inDir, dot3(off, K.inDir)));
+      memo[side] = norm3(len3(p) > 1e-3 ? p : sub3(out, mul3(K.inDir, dot3(out, K.inDir))));
+    }
+    return memo[side];
   }
   function punchPath(E, A, T, u, out, fw) {
     if (E.typ === 0) return lerp3(A, T, u);                                    // 直拳：直线
@@ -2183,7 +2200,7 @@ void main() {
     return ev;
   }
 
-  return { accent, tickEvents, fightAudio, trainingAudio, drawTraining, trainPose, drawFigures, sideCam, F, PH, LOOK, look, build, drawHead3, prep, bodyPose, armsOf, targetOf, rigOf, feetAt, reachLim, drawOrder, drawBoutFrame, makeCam, drawArena, hud, hudHeight, caption, banner, timeline, segAt, renderFight, setSim: s => { SIM = s; }, ease, easeOut, lerp, clamp, shade, mixHex, hash,
+  return { accent, tickEvents, fightAudio, trainingAudio, drawTraining, trainPose, drawFigures, sideCam, F, PH, LOOK, look, build, drawHead3, hairView, prep, bodyPose, armsOf, targetOf, rigOf, feetAt, reachLim, drawOrder, drawBoutFrame, makeCam, drawArena, hud, hudHeight, caption, banner, timeline, segAt, renderFight, setSim: s => { SIM = s; }, ease, easeOut, lerp, clamp, shade, mixHex, hash,
     setSkins: SKIN.set, skinsReady: SKIN.ready };
 })();
 if (typeof window !== 'undefined') window.VIZ = VIZ;

@@ -54,11 +54,12 @@ for (const set of sets) {
     const Js = [0, 1].map(k => VIZ.bodyPose(rep, tf, k));
     Js.forEach((J, k) => VIZ.armsOf(rep, tf, k, J, Js[1 - k]));
     const t = Math.floor(tf), down = Js.map(J => J.down !== undefined);
+    const tp = Math.floor(tf - H), newRound = tp >= 0 && t + 1 < n && rep.frames[tp + 1] && rep.frames[tp + 1].r !== rep.frames[tp].r;   // 和上一个采样之间换了回合，两人回到角落
     const tag = (k, extra = '') => `${set.name} ${k}号 第${tf.toFixed(2)}帧 ${ctxOf(rep, k, tf)}${extra}`;
     for (let k = 0; k < 2; k++) {
       const J = Js[k], Rk = Rg[k];
       // A. 跳变：1/20 帧里挪了 5 厘米以上（每秒 20 米）
-      if (prev && !(t + 1 < n && rep.frames[Math.floor(tf - H) + 1] && rep.frames[Math.floor(tf - H) + 1].r !== rep.frames[Math.floor(tf - H)].r)) {
+      if (prev && !newRound) {
         for (const j of ALL) {
           const d = len(sub(get(J, j), get(prev[k], j)));
           if (d > 0.05) add(`A 跳变·${j.replace(/\.\d/, '')}·${ctxOf(rep, k, tf).replace(/\(.*\)/, '')}`, tag(k, ` ${j} ${(d * 100).toFixed(0)}cm`), d);
@@ -89,10 +90,12 @@ for (const set of sets) {
         const E = J.elbows[h], Sh = J.sh[h];
         const act = rep._mo[k].byHand[h][rep._mo[k].ptr[h][t]], punching = act && tf >= act.t0 && tf < act.t2;
         if (!punching && E[2] > Sh[2] + 0.05 && rep.frames[t].f[k][7] !== 6) add('G 护手时手肘高过肩', tag(k, ` ${h ? '后' : '前'}手`), E[2] - Sh[2]);
-        if (prev && !down[k]) {
-          const ax = sub(J.gloves[h], Sh), ax0 = sub(prev[k].gloves[h], prev[k].sh[h]);
+        if (prev && !newRound) {
+          // 和上一个采样的同一条胳膊比（换站架时前后手对调）
+          const P = prev[k], hp = ((h === 0) === (J.ls > 0)) === (P.ls > 0) ? 0 : 1;
+          const ax = sub(J.gloves[h], Sh), ax0 = sub(P.gloves[hp], P.sh[hp]);
           const perp = (E2, S2, a) => { const v = sub(E2, S2), l = dot(a, a) || 1; return sub(v, a.map(x => x * dot(v, a) / l)); };
-          const p1 = perp(E, Sh, ax), p0 = perp(prev[k].elbows[h], prev[k].sh[h], ax0);
+          const p1 = perp(E, Sh, ax), p0 = perp(P.elbows[hp], P.sh[hp], ax0);
           if (len(p1) > 0.05 && len(p0) > 0.05 && dot(p1, p0) / (len(p1) * len(p0)) < 0.3) add('G 手肘翻面（弯的方向突然变）', tag(k, ` ${h ? '后' : '前'}手`), 1);
         }
       }
@@ -102,9 +105,9 @@ for (const set of sets) {
         if (dh < -0.07) add('E 自己的拳套陷进自己脸里', tag(k, ` ${h ? '后' : '前'}手 ${(dh * 100).toFixed(0)}cm`), -dh);
         if (dt < -0.06) add('E 自己的拳套陷进自己躯干', tag(k, ` ${h ? '后' : '前'}手 ${(dt * 100).toFixed(0)}cm`), -dt);
       }
-      // H. 头部画法（侧面 / 正面 / 背面）来回跳
-      const cam = rep._cam[t], rot = cam[3], ang = J.faceAng + rot * Math.PI / 2;
-      const cs = Math.cos(ang), sn = Math.sin(ang), mode = sn > 0.6 ? '背面' : Math.abs(cs) > 0.5 ? (cs > 0 ? '侧面右' : '侧面左') : '正面';
+      // H. 2D 头部画法（侧面 / 正面 / 背面，按 viz.js 的 hairView）来回跳。三维皮肤的头是网格，跟着脸的朝向连续转，没有画法可跳
+      if (SKIN) continue;
+      const cam = rep._cam[t], mode = VIZ.hairView(J.faceAng + cam[3] * Math.PI / 2);
       if (prevMode[k] && mode !== prevMode[k]) {
         const ml = modeLast[k]; ml.push(tf); while (ml.length && tf - ml[0] > 10) ml.shift();
         add('H 头部画法切换', tag(k, ` ${prevMode[k]}→${mode}`), 1);
