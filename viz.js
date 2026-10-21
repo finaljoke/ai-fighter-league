@@ -598,7 +598,7 @@ const VIZ = (() => {
     const gF = [0, 1].map(w => guardLocal(f, ls, post, post2, w, su)), gG = [0, 1].map(w => guardLocal(g, ls, post, post2, w, su));
     let crouch = lerp(gA.crouch, gB.crouch, a), pitch = lerp(gA.pitch, gB.pitch, a), roll = 0, pelF = 0, pelL = 0;
     let yaw = ls * lerp(gA.alpha, gB.alpha, a) * (1 - 2 * su);       // 带符号的转腰：+ = 左肩在前（换站架时转过去）
-    let headF = 0.04, headL = 0, headZ = 0, headYaw = 0, guardPush = 0, flash = false, slide = 0, lungePitch = 0;
+    let headF = 0.04, headL = 0, headZ = 0, headYaw = 0, guardPush = 0, flash = false, slide = 0, lungePitch = 0, headC = 0;
     const heel = [0, 0], fyaw = [0, 0];                               // 按前脚、后脚
     const fat = fatigueOf(lerp(f[F.stam], g[F.stam], a)), hurt = f[F.stun] > 60;
     crouch += 0.012 * (1 + Math.sin(tf * 0.55 + k * 1.7));             // 脚下一直在弹
@@ -631,10 +631,11 @@ const VIZ = (() => {
     const C = mo.clinches[mo.cptr[t]];
     if (C && tf >= C.t0 && tf < C.t2) {
       const e = tf < C.t1 ? ease((tf - C.t0) / (C.t1 - C.t0)) : 1 - ease((tf - C.t1) / (C.t2 - C.t1));
-      pitch += 0.3 * e; pelF += 0.12 * e;
+      pitch += 0.3 * e; pelF += 0.12 * e; headC = 0.16 * e * (1 - clinchWeight(mo, tf));       // 扑上去时头已经往左边歪（同缠抱；护手不跟着这一下横甩）
     }
     const cw = clinchWeight(mo, tf);                       // 抱住的程度：抱上去用半帧，分开后 4 帧回到站姿
-    if (cw > 0) { pitch = lerp(pitch, Math.max(pitch, 0.38), cw); headL += ls * 0.12 * cw; crouch += 0.04 * cw; }
+    // 抱住时头歪到自己的左边、搭在对方右肩外面：两个人都往自己的左边歪，头就错开（按前手那侧歪，一正架一反架时会撞在一起）
+    if (cw > 0) { pitch = lerp(pitch, Math.max(pitch, 0.38), cw); headL += 0.16 * cw; crouch += 0.04 * cw; }
     // 挨打：直拳把头打得往后仰，勾拳把脸打偏，上勾拳把下巴顶起来；身体拳打得弯腰，肝区往右侧弯。被挡住只是护手被压回来
     for (let i = mo.hptr[t]; i >= 0; i--) {
       const H = mo.hits[i], dt = tf - H.t;
@@ -667,7 +668,7 @@ const VIZ = (() => {
     (ls > 0 ? shL : shR)[2] += lift * (1 - su); (ls > 0 ? shR : shL)[2] += lift * su;                          // 换站架时换到新的前肩
     const hy = 0.55 * yaw, hipAx = Wv(Math.sin(hy), Math.cos(hy), 0);
     const hipL = add3(pel, mul3(hipAx, R.hipHalf)), hipR = sub3(pel, mul3(hipAx, R.hipHalf));
-    const head = add3(add3(chest, mul3(sp, R.neckL + R.headR * 0.95)), Wv(headF, headL, headZ));
+    const headG = add3(add3(chest, mul3(sp, R.neckL + R.headR * 0.95)), Wv(headF, headL, headZ)), head = add3(headG, Wv(0, headC, 0));
     const [ox, oy] = placeAt(rep, tf, 1 - k);
     const faceAng = th + clamp(wrapPi(Math.atan2(oy - y, ox - x) - th), -1.1, 1.1) + headYaw;               // 眼睛盯着对手
     // 脚：钉在台面上的位置，加上出拳时前脚往前滑、脚跟拧起来
@@ -682,7 +683,7 @@ const VIZ = (() => {
     const tuck = clamp((Math.hypot(ox - x, oy - y) - 0.55) / 0.45, 0.45, 1);
     const shRole = ls > 0 ? [shL, shR] : [shR, shL], reach = (R.ua + R.fa) * 0.88;
     const place = (v, h) => {
-      let G = outside(outside(add3(head, Wv(v[0] * tuck - 0.03 * fat - guardPush,
+      let G = outside(outside(add3(headG, Wv(v[0] * tuck - 0.03 * fat - guardPush,
         v[1] + (Math.sign(v[1]) || (h === 0 ? ls : -ls)) * 0.12 * (1 - tuck), v[2] - 0.12 * fat - (hurt ? 0.04 : 0))),
         head, head, R.headR + R.glove * 0.75), pel, chest, R.chestD + R.glove * 0.8);                       // 拳套贴着脸、贴着肚子，不陷进去
       const S = shRole[h], v2 = sub3(G, S), d = len3(v2);
@@ -722,7 +723,9 @@ const VIZ = (() => {
       }
       if (J.cw > 0 && Jo) {                          // 缠抱：手搭到对方同一侧的肩背上（够得着的地方），抱上去、分开都是渐变的
         const sh = dot3(sub3(Jo.shL, J.chest), out) > dot3(sub3(Jo.shR, J.chest), out) ? Jo.shL : Jo.shR;
-        let W2 = add3(add3(sh, mul3(fw, 0.05)), [0, 0, -0.05]);
+        // 拳套贴在对方肩后的表面上：从对方肩关节往对方身后挪出肩膀的厚度，再推到对方躯干外面（不陷进背里）。
+        // 头歪向自己左边（见 bodyPose），左边那只手搭低一点、搂在背上，不跟自己的脸挤在对方同一个肩上
+        let W2 = outside(add3(add3(sh, mul3(fw, Jo.R.chestD * 0.6 + R.glove * 0.8)), [0, 0, side > 0 ? -0.17 : -0.05]), Jo.pel, Jo.chest, Jo.R.chestD + R.glove);
         const v = sub3(W2, S), d = len3(v), m = (R.ua + R.fa) * 0.95;
         if (d > m) W2 = add3(S, mul3(v, m / d));
         G = lerp3(G, W2, J.cw); pole = norm3(lerp3(pole, norm3(add3(out, [0, 0, -0.5])), J.cw));
@@ -1231,15 +1234,19 @@ const VIZ = (() => {
       if (c < -0.9999) { const ax = perp3(Math.abs(a[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0], a); return sub3(mul3(ax, 2 * dot3(ax, x)), x); }
       return add3(add3(mul3(x, c), cross3(v, x)), mul3(v, dot3(v, x) / (1 + c)));
     }
-    // 一串关节上的位置 (k, v) → 中心和切线：k 在段内时 v 是比例，k = -1 / n 时 v 是首尾往外延的米数；关节附近切线渐变（同 build_skin.py 的 Chain.at）
+    // 一串关节上的位置 (k, v) → 中心和切线：k 在段内时 v 是比例，k = -1 / n 时 v 是首尾往外延的米数（同 build_skin.py 的 Chain.at）。
+    // 关节前后各 blend 段长的范围里，中心走一段二次贝塞尔（两端在两根骨头上、控制点是关节）：肘、膝弯得厉害时外侧是圆的，不是一道折角
     function chainAt(P, k, v, blend) {
-      const n = P.length - 1, d = i => norm3(sub3(P[i + 1], P[i]));
-      if (k < 0) { const d0 = d(0); return [add3(P[0], mul3(d0, v)), d0]; }
-      if (k >= n) { const dn = d(n - 1); return [add3(P[n], mul3(dn, v)), dn]; }
-      let t = d(k);
-      if (v < blend && k > 0) t = norm3(lerp3(d(k - 1), t, ease((v + blend) / (2 * blend))));
-      else if (v > 1 - blend && k + 1 < n) t = norm3(lerp3(t, d(k + 1), ease((v - 1 + blend) / (2 * blend))));
-      return [lerp3(P[k], P[k + 1], v), t];
+      const n = P.length - 1, d = i => sub3(P[i + 1], P[i]);
+      if (k < 0) { const d0 = norm3(d(0)); return [add3(P[0], mul3(d0, v)), d0]; }
+      if (k >= n) { const dn = norm3(d(n - 1)); return [add3(P[n], mul3(dn, v)), dn]; }
+      const J = v < 0.5 ? k : k + 1, s = v < 0.5 ? 0.5 + v / (2 * blend) : (v - 1 + blend) / (2 * blend);
+      if (J > 0 && J < n && s >= 0 && s <= 1) {
+        const A = sub3(P[J], mul3(d(J - 1), blend)), B = add3(P[J], mul3(d(J), blend));
+        const c = add3(add3(mul3(A, (1 - s) * (1 - s)), mul3(P[J], 2 * s * (1 - s))), mul3(B, s * s));
+        return [c, norm3(add3(mul3(sub3(P[J], A), 1 - s), mul3(sub3(B, P[J]), s)))];
+      }
+      return [lerp3(P[k], P[k + 1], v), norm3(d(k))];
     }
     // 有皮肤的角色：骨长和身体尺寸换成从立绘量出来的。胳膊总长不换（跟着模拟的臂展），按立绘里上臂、前臂的比例分；
     // 骨盆高度：两脚前后分开 0.22 米站着时，腿离伸直还差腿长的 6.5%（膝盖弯四十度上下，架势再往下蹲一点）。余量再少，轴转、滑步时脚够不着；
@@ -1282,8 +1289,11 @@ const VIZ = (() => {
         ch['foot' + s] = [add3(O, add3(mul3(f, B.heel * g), mul3(fu, B.zc * g + heel * 1.5))), add3(O, add3(mul3(f, B.toe * g), mul3(fu, B.zc * g)))];
         up['foot' + s] = fu;
       }
+      // 两肩比胸口高出多少（顺着脊柱量）、离中线多远：肩卷把前肩抬起来时，躯干顶那一侧跟着抬（见 posePart）
+      const sR = sub3(J.shR, J.chest), sL = sub3(J.shL, J.chest);
       return { ch, up, rHip, rSh, top: [rSh, cross3(spine, rSh), spine], bot: [rHip, cross3(spine, rHip), spine], fwTop: cross3(spine, rSh),
-        face: [Math.cos(J.faceAng), Math.sin(J.faceAng), 0], fac: J.R.skin };
+        face: [Math.cos(J.faceAng), Math.sin(J.faceAng), 0], fac: J.R.skin,
+        lift: [dot3(sR, spine), dot3(sL, spine)], half: [Math.max(0.05, dot3(sR, rSh)), Math.max(0.05, -dot3(sL, rSh))], spineL: len3(sub3(J.chest, J.pel)) };
     }
     // 一段身体按这一帧的骨骼摆好：每圈截面的中心、标架，再按截面参数放顶点，最后算法线
     function posePart(pt, Fr, blend) {
@@ -1306,9 +1316,12 @@ const VIZ = (() => {
         else if (i === 0) { X = minrot(T0, t, w(pt.root.X)); Y = minrot(T0, t, w(pt.root.Y)); }
         else { X = minrot(prevT, t, X); Y = minrot(prevT, t, Y); }
         prevT = t; C.push(c); T.push(t);
+        // 躯干上部三成按两肩的高低斜过去：肩卷抬起前肩时，那一侧的斜方肌、肩头跟着抬，胳膊根不从肩上冒出来
+        const hf = pt.kind !== 'torso' ? 0 : k < 0 ? 0 : k === 0 ? v : 1 + v * g / Fr.spineL, wl = ease((hf - 0.7) / 0.3);
         for (let j = 0; j < nt; j++) {
           const a = ox + rx * pt.cx[j], b = oy + ry * pt.sy[j], o = (i * nt + j) * 3;
-          pos[o] = c[0] + X[0] * a + Y[0] * b; pos[o + 1] = c[1] + X[1] * a + Y[1] * b; pos[o + 2] = c[2] + X[2] * a + Y[2] * b;
+          const s = wl > 0 ? wl * (a >= 0 ? Fr.lift[0] * Math.min(1.3, a / Fr.half[0]) : Fr.lift[1] * Math.min(1.3, -a / Fr.half[1])) : 0;
+          pos[o] = c[0] + X[0] * a + Y[0] * b + t[0] * s; pos[o + 1] = c[1] + X[1] * a + Y[1] * b + t[1] * s; pos[o + 2] = c[2] + X[2] * a + Y[2] * b + t[2] * s;
         }
         if (i === 0 || i === n - 1) { const o = (n * nt + (i ? 1 : 0)) * 3; pos[o] = c[0] + X[0] * ox + Y[0] * oy; pos[o + 1] = c[1] + X[1] * ox + Y[1] * oy; pos[o + 2] = c[2] + X[2] * ox + Y[2] * oy; }
       }
@@ -1399,7 +1412,8 @@ out vec4 o;
 void main() {
   float d = max(dot(normalize(vN), uLight), 0.0);
   vec3 base = uTex ? (texture(uT, vF).rgb * vW.x + texture(uT, vS).rgb * vW.y + texture(uT, vB).rgb * vW.z) / max(vW.x + vW.y + vW.z, 1e-3) : vCol;
-  o = vec4(mix(base * (uTex ? 0.8 + 0.3 * d : 0.5 + 0.6 * d), vec3(1.0), uFlash), 1.0);
+  vec3 c = base * (uTex ? 0.8 + 0.3 * d : 0.5 + 0.6 * d);
+  o = vec4(mix(c, vec3(1.0), uFlash * smoothstep(0.2, 0.55, dot(c, vec3(0.299, 0.587, 0.114)))), 1.0);   // 闪白只白亮处（脸），头发不变灰
 }`;
     function init() {
       if (gl || failed) return !!gl;
@@ -1479,7 +1493,7 @@ void main() {
         if (mesh.tex) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, mesh.tex); }
         for (const pt of mesh.parts) {
           posePart(pt, Fr, mesh.blend);
-          gl.uniform1f(U.uFlash, pt.kind === 'head' && Js[k].flash ? 0.25 : 0);    // 头部挨了重拳那一下脸上一白（同 2D 的 flash）
+          gl.uniform1f(U.uFlash, pt.kind === 'head' && Js[k].flash ? 0.35 : 0);    // 头部挨了重拳那一下脸上一白（同 2D 的 flash）
           gl.bindVertexArray(pt.vao);
           gl.bindBuffer(gl.ARRAY_BUFFER, pt.bPos); gl.bufferSubData(gl.ARRAY_BUFFER, 0, pt.pos);
           gl.bindBuffer(gl.ARRAY_BUFFER, pt.bNor); gl.bufferSubData(gl.ARRAY_BUFFER, 0, pt.nor);

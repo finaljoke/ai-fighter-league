@@ -31,14 +31,16 @@ import bodies as BD                    # noqa: E402
 
 NT = 32                 # 一圈的顶点数
 STEP = 0.012            # 截面间距（米）
-BLEND = 0.25            # 关节处切线渐变的范围（按段长的比例），viz.js 的 SKIN 用同一个数
+BLEND = 0.25            # 关节前后圆过去的范围（按段长的比例），viz.js 的 SKIN 用同一个数
 FOOT_ZC = 0.045         # 脚的中轴离地高度（米）
 SHRINK = 0.985          # 截面略往里收，贴图不采到轮廓外面
 EXP = {"torso": 2.3, "head": 2.2, "arm": 2.1, "leg": 2.2, "foot": 2.6}
-# 管子两头收成圆顶，不留平盖：out = 往外多接一段圆顶（三角肌顶、大腿根，藏在躯干里），in = 最后一段收圆（拳面、脚尖脚跟，长度不变）
+# 管子两头收成圆顶，不留平盖：out = 往外多接一个半球（胳膊根、大腿根），in = 最后一段收圆（拳面、脚尖脚跟、躯干顶，长度不变）
+# out 的半球球心在关节上、半径取第一圈截面的平均半径：胳膊、腿绕关节怎么转，这个球都在原地，不会往外戳出一截管子头
 DOME = {"arm": ("out", "in"), "leg": ("out", None), "foot": ("in", "in"), "torso": (None, "in"), "head": (None, None)}
-# 躯干顶收圆：斜方肌斜着接到脖子，镜头从上往下看不是一块平台；收多了斜方肌被削掉，护架时三角肌顶露在外面
-DOME_LEN = {"arm": (0.025, 0.03), "leg": (0.03, 0.0), "foot": (0.03, 0.04), "torso": (0, 0.03)}
+DOME_LEN = {"arm": (0, 0.03), "foot": (0.03, 0.04), "torso": (0, 0.012)}       # in 的长度（米）；躯干顶已经按轮廓收到脖子根，只收个边
+DOME_T = (1.0, 0.95, 0.85, 0.7, 0.5, 0.25)                                       # out 半球的几圈：离第一圈的距离占半径的比例
+YOKE = (-0.06, 0.0)     # 肩关节往下 6 厘米到肩关节这一段，躯干的宽度从"只算躯干"渐变到"连三角肌顶"（相对肩关节高度，米）
 NECK_RX, NECK_RY = 0.068, 0.075     # 脖子最粗多少（正面、侧面在脖子那几行会量到斜方肌、头发）
 HEAD_FRAC = 0.465 + 0.3 + 0.045 + 0.064 * 0.95   # viz.js rig 里头心离地占身高 H 的比例：立绘的头心高按这个对上身高
 
@@ -101,20 +103,18 @@ class Chain:
         return k, (u - self.cum[k]) / self.len[k]
 
     def at(self, k, v):
+        """关节前后各 BLEND 段长的范围里，中心走一段二次贝塞尔（两端在两根骨头上、控制点是关节），同 viz.js 的 chainAt。"""
         n = len(self.len)
         if k < 0:
             return self.P[0] + self.d[0] * v, self.d[0]
         if k >= n:
             return self.P[-1] + self.d[-1] * v, self.d[-1]
-        c = self.P[k] + (self.P[k + 1] - self.P[k]) * v
-        t = self.d[k]
-        if v < BLEND and k > 0:
-            w = smoothstep((v + BLEND) / (2 * BLEND))
-            t = norm(self.d[k - 1] * (1 - w) + self.d[k] * w)
-        elif v > 1 - BLEND and k + 1 < n:
-            w = smoothstep((v - 1 + BLEND) / (2 * BLEND))
-            t = norm(self.d[k] * (1 - w) + self.d[k + 1] * w)
-        return c, t
+        J, s = (k, 0.5 + v / (2 * BLEND)) if v < 0.5 else (k + 1, (v - 1 + BLEND) / (2 * BLEND))
+        if 0 < J < n and 0 <= s <= 1:
+            A = self.P[J] - (self.P[J] - self.P[J - 1]) * BLEND
+            B = self.P[J] + (self.P[J + 1] - self.P[J]) * BLEND
+            return (1 - s) ** 2 * A + 2 * s * (1 - s) * self.P[J] + s * s * B, norm((self.P[J] - A) * (1 - s) + (B - self.P[J]) * s)
+        return self.P[k] + (self.P[k + 1] - self.P[k]) * v, self.d[k]
 
 
 class Rig:
@@ -182,7 +182,8 @@ class Rig:
         (xh, yh), (xk, yk) = self.px("hipR"), self.px("knR")
         leg_x = lambda y: int(round(xh + (xk - xh) * (y - yh) / (yk - yh)))
         hem = next(y for y in range(crotch, yk) if not any(far(y + d, leg_x(y + d)) for d in range(4)))
-        return {"hairTop": hair + 2, "neckBase": int(round(chest - 0.35 * (chest - chin))), "crotch": crotch, "waist": waist, "hem": hem}
+        return {"hairTop": hair + 2, "trapTop": int(round(chest - 0.6 * (chest - chin))), "neckBase": int(round(chest - 0.35 * (chest - chin))),
+                "crotch": crotch, "waist": waist, "hem": hem}
 
     def derive_split(self, side):
         """正面里胳膊和躯干的分界线：从胳肢窝（胳膊和躯干第一次分开的那一行）往上斜到脖子根旁边。"""
@@ -295,7 +296,7 @@ def build(rid, debug=None):
         us = np.linspace(u0, u1, n)
         d0, d1 = DOME[kind]
         L0, L1 = DOME_LEN.get(kind, (0, 0))
-        pre = [u0 - L0 * t for t in (1.0, 0.7, 0.35)] if d0 == "out" else []       # 往外接的圆顶：先量（量不准不要紧），再按圆顶缩
+        pre = [u0 - 0.04 * t for t in DOME_T] if d0 == "out" else []      # 往外接的半球：先占位，量完第一圈按它的半径重新摆
         us = np.concatenate([pre, us])
         n = len(us)
         rings, C, Fx, Fy, Tt = [], [], [], [], []
@@ -331,9 +332,14 @@ def build(rid, debug=None):
             col = ndi.median_filter(col, size=5, mode="nearest")
             ext[:, j] = ndi.gaussian_filter1d(col, 1.2, mode="nearest")
         ext *= SHRINK
-        if pre:                                        # 往外的圆顶：照第一圈真截面的样子，按四分之一圆往里收
-            for i, u in enumerate(us[:len(pre)]):
-                ext[i] = ext[len(pre)] * np.sqrt(max(0.0, 1 - ((u0 - u) / L0) ** 2)) + 1e-4
+        if pre:                                        # 往外的半球：照第一圈真截面的样子，按四分之一圆往里收
+            R0 = float(ext[len(pre)].mean())
+            for i, t in enumerate(DOME_T):
+                us[i] = u0 - R0 * t
+                k, v = ch.kv(us[i])
+                rings[i][:2] = [k, v]
+                C[i] = ch.at(k, v)[0]                  # 贴图坐标按挪过去的位置算
+                ext[i] = ext[len(pre)] * np.sqrt(max(0.0, 1 - t ** 2)) + 1e-4
         for d, L, a, b in ((d0, L0, us[0], 1), (d1, L1, us[-1], -1)):
             if d == "in":                              # 往里收的圆顶：最后 L 米按四分之一圆收，长度不变
                 t = np.clip(1 - b * (us - a) / L, 0, 1) if b == 1 else np.clip(1 - (a - us) / L, 0, 1)
@@ -390,9 +396,20 @@ def build(rid, debug=None):
         a, b = rg.split_x("R", y), rg.split_x("L", y)
         return (a is None or x >= a) and (b is None or x <= b)
 
+    sh_z = (J["shR"][2] + J["shL"][2]) / 2
+
+    # 躯干：正面按分界线只量躯干；肩关节附近渐变到连三角肌顶一起量（YOKE）。胳膊往前、往里、往上抬时，
+    # 圆圆的肩头留在躯干上，胳膊从它底下出来；不然胳膊顶端那截管子会从躯干侧面伸出来，像翅膀、柱子
     def m_torso(c, X, Y, u):
         okf, oks = ok_front(cond=torso_ok), ok_side_masked(False)
-        return [meas_dir("f", c, X, okf), meas_dir("f", c, -X, okf), meas_dir("s", c, Y, oks), meas_dir("s", c, -Y, oks)]
+        r = [meas_dir("f", c, X, okf), meas_dir("f", c, -X, okf), meas_dir("s", c, Y, oks), meas_dir("s", c, -Y, oks)]
+        w = smoothstep((c[2] - sh_z - YOKE[0]) / (YOKE[1] - YOKE[0]))
+        if w > 0:
+            for j, D in ((0, X), (1, -X)):
+                a = meas_dir("f", c, D, ok_front())
+                if not (np.isnan(a) or np.isnan(r[j])):
+                    r[j] += (a - r[j]) * w
+        return r
 
     def m_head(c, X, Y, u):
         okf, oks = ok_front(), ok_side_masked(True)
@@ -433,7 +450,8 @@ def build(rid, debug=None):
         w = smoothstep(u / torso.cum[-1])
         X = perp(r_hip + (r_sh - r_hip) * w, t)
         return X, np.cross(t, X), w
-    part("torso", "torso", torso, rg.z_of_row(rows["crotch"]) - J["pel"][2], torso.cum[-1] + rg.z_of_row(rows["neckBase"]) - J["chest"][2],
+    # 躯干顶接到脖子根（trapTop）：上面几圈按正面轮廓一圈比一圈窄，就是斜方肌从脖子斜到肩头的坡
+    part("torso", "torso", torso, rg.z_of_row(rows["crotch"]) - J["pel"][2], torso.cum[-1] + rg.z_of_row(rows["trapTop"]) - J["chest"][2],
          torso_frames, m_torso)
     # 头颈：脖子跟着躯干朝向，头跟着脸的朝向（立绘里两者一样，画面里脸会转向对手）
     fw0 = top[1]
@@ -446,12 +464,12 @@ def build(rid, debug=None):
     glove_w = []
     for s in "RL":
         arm = Chain([J["sh" + s], J["el" + s], J["wr" + s], J["gc" + s], J["gt" + s]])
-        # 从肩关节起、往外只接圆顶那 2.5 厘米，正好到立绘的肩膀轮廓；再长，护架时三角肌顶从躯干上戳出来
+        # 从肩关节起，往外只接一个半球（藏在躯干的肩头里）；从肩关节往外先接一截整粗的管子，胳膊一转那截管子头就戳出来
         part("arm" + s, "arm", arm, 0.0, arm.cum[-1] + 0.006, "transport", m_arm(s), parent=top)
         us, ext = meas["arm" + s]
         glove_w.append(float(((ext[:, 0] + ext[:, 1]) / 2)[us >= arm.cum[2]].max()))   # 拳套最宽处的一半
         leg = Chain([J["hip" + s], J["kn" + s], J["an" + s]])
-        part("leg" + s, "leg", leg, -0.05, leg.cum[-1], "transport", m_leg(s), parent=bot)
+        part("leg" + s, "leg", leg, 0.0, leg.cum[-1], "transport", m_leg(s), parent=bot)      # 同胳膊：从胯关节起接半球
         fy, row = rg.pf(J["an" + s]), int(rg.G - 30)          # 脚宽：离地 30 像素那一行（再低就量到台面上的影子）
         run = [x for x in range(int(fy[0]) - 80, int(fy[0]) + 80) if inside(x, row)]
         half = (max(run) - min(run)) / 2 / S
@@ -496,7 +514,7 @@ def build(rid, debug=None):
     top = 2 * rg.px("head")[1] - rg.px("chin")[1]
     frac = lambda n: (rg.G - rg.px(n)[1]) / (rg.G - top)
     print(f"  关节离地占身高：肩 {frac('shR'):.3f}、胯 {frac('hipR'):.3f}、膝 {frac('knR'):.3f}（真人约 0.82、0.52、0.28，差 0.02 以上回去看标注）")
-    print(f"  推出来的：头顶 {rows['hairTop']} 行、脖子根 {rows['neckBase']} 行、腰头 {rows['waist']} 行、裆 {rows['crotch']} 行、裤脚 {rows['hem']} 行；"
+    print(f"  推出来的：头顶 {rows['hairTop']} 行、躯干顶 {rows['trapTop']} 行、脖子根 {rows['neckBase']} 行、腰头 {rows['waist']} 行、裆 {rows['crotch']} 行、裤脚 {rows['hem']} 行；"
           f"胳膊分界 {json.dumps(rg.split, default=int)}")
     if debug:
         overlay(rg, parts, side_tex, os.path.join(debug, rid))
@@ -552,9 +570,27 @@ def inpaint_side(rg):
             t = ((np.arange(s, e + 1) - s + 1) / (e - s + 2))[:, None]
             im[y, s:e + 1] = cl * (1 - t) + cr * t
             fill[y, s:e + 1] = True
+    # 短裤布面（腰头往下一截到裤脚）：侧面的黑条、金边、褶子都是竖着的，横着接会把红布和黑条搅成一团黑。
+    # 按同一列往下（下面没露出来就往上）最近露出来的布料颜色接上，这些点不再参与下面的抹匀
+    keep = np.zeros_like(fill)
+    fa, fb = rg.rows["waist"] + int(round(0.065 * rg.S)), rg.rows["hem"]
+    src = im.copy()
+    for x in range(w):
+        col = body[fa:fb, x]
+        if not col.any():
+            continue
+        vis = np.where(col)[0] + fa
+        for y in np.where(fill[fa:fb, x])[0] + fa:
+            below, above = vis[vis > y], vis[vis < y]
+            near = below[:24] if len(below) else above[-24:]       # 最近的二十来行布料取平均：一行的噪点、绗缝的菱格不拉成竖线
+            im[y, x] = src[near[2:] if len(near) > 4 else near, x].mean(0)
+            keep[y, x] = True
+    if keep.any():                                             # 横着略微抹一下，竖纹不那么像条形码
+        soft = ndi.gaussian_filter1d(im, 2.5, axis=1)
+        im[keep] = soft[keep]
     ys, xs = np.where(fill)
     y0, y1, xa, xb = max(0, ys.min() - 2), ys.max() + 3, max(0, xs.min() - 2), xs.max() + 3
-    sub, f = im[y0:y1, xa:xb], fill[y0:y1, xa:xb]
+    sub, f = im[y0:y1, xa:xb], (fill & ~keep)[y0:y1, xa:xb]
     ok = (body | fill)[y0:y1, xa:xb].astype(float)[..., None]
     # 腰头上沿、裤脚两行是分界：皮肤的颜色不往短裤里抹，短裤的颜色也不往皮肤上抹
     zone = np.digitize(np.arange(y0, y1), [rg.rows["waist"], rg.rows["hem"]])[:, None, None] * np.ones_like(ok)
