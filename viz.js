@@ -1242,13 +1242,14 @@ const VIZ = (() => {
       return [lerp3(P[k], P[k + 1], v), t];
     }
     // 有皮肤的角色：骨长和身体尺寸换成从立绘量出来的。胳膊总长不换（跟着模拟的臂展），按立绘里上臂、前臂的比例分；
-    // 骨盆高度让腿留的余量和原来的骨架一样（两脚前后分开 0.22 米站着时，腿离伸直还差同样多，滑步、上步时脚够得着）。
+    // 骨盆高度：两脚前后分开 0.22 米站着时，腿离伸直还差腿长的 6.5%（膝盖弯四十度上下，架势再往下蹲一点）。余量再少，轴转、滑步时脚够不着；
+    // 不照原来骨架的余量（8 厘米）：原来的腿比真人长，蹲得深也不显矮，换成立绘的腿长整个人就矮一截。
     // 身高、体重、力量和做皮肤时不一样（身体参数在赛季里会变），长度按身高、粗细按 build 的比例加减
     function fit(body, R) {
       const S = on && body && skins[body.id] && skins[body.id].data.rig;
       if (!S) return R;
       const ref = build(skins[body.id].data.ref), g = R.H / S.H, legs = (S.thigh + S.shin) * g;
-      const slack = R.thigh + R.shin - Math.hypot(R.hipZ - R.ankle, 0.22);
+      const slack = 0.065 * legs;
       const fac = { len: g, torso: R.chest / ref.chest, arm: R.arm / ref.arm, leg: R.legW / ref.legW, neck: R.neckW / ref.neckW };
       return { ...R, ua: R.armLen * S.uaFrac, fa: R.armLen * (1 - S.uaFrac), thigh: S.thigh * g, shin: S.shin * g, ankle: S.ankle * g,
         hipZ: S.ankle * g + Math.sqrt(Math.max(0.04, (legs - slack) ** 2 - 0.22 ** 2)), spine: S.spine * g, neckL: S.neckL * g, headR: S.headR * g,

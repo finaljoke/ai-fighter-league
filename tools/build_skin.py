@@ -37,7 +37,8 @@ SHRINK = 0.985          # 截面略往里收，贴图不采到轮廓外面
 EXP = {"torso": 2.3, "head": 2.2, "arm": 2.1, "leg": 2.2, "foot": 2.6}
 # 管子两头收成圆顶，不留平盖：out = 往外多接一段圆顶（三角肌顶、大腿根，藏在躯干里），in = 最后一段收圆（拳面、脚尖脚跟，长度不变）
 DOME = {"arm": ("out", "in"), "leg": ("out", None), "foot": ("in", "in"), "torso": (None, "in"), "head": (None, None)}
-DOME_LEN = {"arm": (0.025, 0.03), "leg": (0.03, 0.0), "foot": (0.03, 0.04), "torso": (0, 0.06)}   # 躯干顶收圆：斜方肌斜着接到脖子，镜头从上往下看不是一块平台
+# 躯干顶收圆：斜方肌斜着接到脖子，镜头从上往下看不是一块平台；收多了斜方肌被削掉，护架时三角肌顶露在外面
+DOME_LEN = {"arm": (0.025, 0.03), "leg": (0.03, 0.0), "foot": (0.03, 0.04), "torso": (0, 0.03)}
 NECK_RX, NECK_RY = 0.068, 0.075     # 脖子最粗多少（正面、侧面在脖子那几行会量到斜方肌、头发）
 HEAD_FRAC = 0.465 + 0.3 + 0.045 + 0.064 * 0.95   # viz.js rig 里头心离地占身高 H 的比例：立绘的头心高按这个对上身高
 
@@ -445,7 +446,8 @@ def build(rid, debug=None):
     glove_w = []
     for s in "RL":
         arm = Chain([J["sh" + s], J["el" + s], J["wr" + s], J["gc" + s], J["gt" + s]])
-        part("arm" + s, "arm", arm, -0.03, arm.cum[-1] + 0.006, "transport", m_arm(s), parent=top)
+        # 从肩关节起、往外只接圆顶那 2.5 厘米，正好到立绘的肩膀轮廓；再长，护架时三角肌顶从躯干上戳出来
+        part("arm" + s, "arm", arm, 0.0, arm.cum[-1] + 0.006, "transport", m_arm(s), parent=top)
         us, ext = meas["arm" + s]
         glove_w.append(float(((ext[:, 0] + ext[:, 1]) / 2)[us >= arm.cum[2]].max()))   # 拳套最宽处的一半
         leg = Chain([J["hip" + s], J["kn" + s], J["an" + s]])
@@ -471,7 +473,8 @@ def build(rid, debug=None):
     rig = {"H": round(body_H(rg.body), 4), "uaFrac": round(ua / (ua + fa), 4), "spine": round(sp, 4),
            "thigh": round(mean2(lambda s: L("hip" + s, "kn" + s)), 4), "shin": round(mean2(lambda s: L("kn" + s, "an" + s)), 4),
            "ankle": round(float((J["anR"][2] + J["anL"][2]) / 2), 4), "headR": round(head_r, 4),
-           "neckL": round(L("chest", "head") - 0.95 * head_r, 4), "shHalf": round(L("shL", "shR") / 2, 4), "hipHalf": round(L("hipL", "hipR") / 2, 4),
+           # 脖子只算顺着脊柱的那段：头往前探的那部分画面里另有前探量，算进脖子长会把头顶高
+           "neckL": round(float(np.dot(J["head"] - J["chest"], T0)) - 0.95 * head_r, 4), "shHalf": round(L("shL", "shR") / 2, 4), "hipHalf": round(L("hipL", "hipR") / 2, 4),
            "chestD": round(float(ring_at("torso", 0.62 * sp)[2]), 4), "waistD": round(float(ring_at("torso", 0.45 * sp)[2]), 4),
            "glove": round(sum(glove_w) / 2, 4), "gloveTip": round((dTip["R"] + dTip["L"]) / 2, 4)}
     b = rg.body
@@ -489,6 +492,10 @@ def build(rid, debug=None):
           + ("（超过 15%：立绘和臂展设定差得多，跟画师或数值确认）" if abs(stretch - 1) > 0.15 else ""))
     print(f"  大腿 {rig['thigh']:.3f}、小腿 {rig['shin']:.3f}、躯干 {sp:.3f}、头半径 {head_r:.3f}、肩宽 {2 * rig['shHalf']:.3f}、"
           f"拳套半宽 {rig['glove']:.3f}、拳套中心到拳面 {rig['gloveTip']:.3f}")
+    # 关节离地占身高（头顶不算头发：头心往上和到下巴一样远），和真人比一比，标偏了一眼能看出来
+    top = 2 * rg.px("head")[1] - rg.px("chin")[1]
+    frac = lambda n: (rg.G - rg.px(n)[1]) / (rg.G - top)
+    print(f"  关节离地占身高：肩 {frac('shR'):.3f}、胯 {frac('hipR'):.3f}、膝 {frac('knR'):.3f}（真人约 0.82、0.52、0.28，差 0.02 以上回去看标注）")
     print(f"  推出来的：头顶 {rows['hairTop']} 行、脖子根 {rows['neckBase']} 行、腰头 {rows['waist']} 行、裆 {rows['crotch']} 行、裤脚 {rows['hem']} 行；"
           f"胳膊分界 {json.dumps(rg.split, default=int)}")
     if debug:
