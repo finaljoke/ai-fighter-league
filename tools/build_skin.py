@@ -38,10 +38,11 @@ EXP = {"torso": 2.3, "head": 2.2, "arm": 2.1, "leg": 2.2, "foot": 2.6}
 # 管子两头收成圆顶，不留平盖：out = 往外多接一个半球（胳膊根、大腿根），in = 最后一段收圆（拳面、脚尖脚跟、躯干顶，长度不变）
 # out 的半球球心在关节上、半径取第一圈截面的平均半径：胳膊、腿绕关节怎么转，这个球都在原地，不会往外戳出一截管子头
 DOME = {"arm": ("out", "in"), "leg": ("out", None), "foot": ("in", "in"), "torso": (None, "in"), "head": (None, None)}
-DOME_LEN = {"arm": (0, 0.03), "foot": (0.03, 0.04), "torso": (0, 0.012)}       # in 的长度（米）；躯干顶已经按轮廓收到脖子根，只收个边
+DOME_LEN = {"arm": (0, 0.03), "foot": (0.03, 0.04), "torso": (0, 0.03)}        # in 的长度（米）；躯干顶收到比脖子略粗，再收几圈圆进脖子里，只收一圈就是脖子根一圈平台
 DOME_T = (1.0, 0.95, 0.85, 0.7, 0.5, 0.25)                                       # out 半球的几圈：离第一圈的距离占半径的比例
 YOKE = (-0.06, 0.0)     # 肩关节往下 6 厘米到肩关节这一段，躯干的宽度从"只算躯干"渐变到"连三角肌顶"（相对肩关节高度，米）
 NECK_RX, NECK_RY = 0.068, 0.075     # 脖子最粗多少（正面、侧面在脖子那几行会量到斜方肌、头发）
+TRAP_NECK = 1.25        # 躯干顶停在正面轮廓收到脖子最粗（NECK_RX）这么多倍的那一行：斜方肌在这儿并进脖子
 HEAD_FRAC = 0.465 + 0.3 + 0.045 + 0.064 * 0.95   # viz.js rig 里头心离地占身高 H 的比例：立绘的头心高按这个对上身高
 
 
@@ -182,8 +183,20 @@ class Rig:
         (xh, yh), (xk, yk) = self.px("hipR"), self.px("knR")
         leg_x = lambda y: int(round(xh + (xk - xh) * (y - yh) / (yk - yh)))
         hem = next(y for y in range(crotch, yk) if not any(far(y + d, leg_x(y + d)) for d in range(4)))
-        return {"hairTop": hair + 2, "trapTop": int(round(chest - 0.6 * (chest - chin))), "neckBase": int(round(chest - 0.35 * (chest - chin))),
+        return {"hairTop": hair + 2, "trapTop": self.derive_trap_top(chest, chin), "neckBase": int(round(chest - 0.35 * (chest - chin))),
                 "crotch": crotch, "waist": waist, "hem": hem}
+
+    def derive_trap_top(self, chest, chin):
+        """躯干顶：两肩连线往上，正面轮廓顺着斜方肌一行比一行窄，收到比脖子略粗的那一行停。
+        按固定比例取会停在三角肌顶上：上面那段坡全归了脖子，脖子成了插在平板肩膀上的一根管子。最多找到下巴往上三成，再往上是脸。"""
+        if "trapTop" in self.R.get("rows", {}):
+            return self.R["rows"]["trapTop"]
+        lim = TRAP_NECK * NECK_RX * self.S
+        for y in range(chest, int(chin - 0.3 * (chest - chin)), -1):
+            run = self.front_run(y, self.vf[2])
+            if run and (run[1] - run[0]) / 2 <= lim:
+                return y
+        raise SystemExit("推不出躯干顶（斜方肌的轮廓一直没收到脖子粗细），在标注里写 rows.trapTop")
 
     def derive_split(self, side):
         """正面里胳膊和躯干的分界线：从胳肢窝（胳膊和躯干第一次分开的那一行）往上斜到脖子根旁边。"""
