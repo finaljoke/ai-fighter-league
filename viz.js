@@ -1312,9 +1312,9 @@ const VIZ = (() => {
         face: [Math.cos(J.faceAng), Math.sin(J.faceAng), 0], fac: J.R.skin,
         lift: [dot3(sR, spine), dot3(sL, spine)], half: [Math.max(0.05, dot3(sR, rSh)), Math.max(0.05, -dot3(sL, rSh))], spineL: len3(sub3(J.chest, J.pel)) };
     }
-    // 一段身体按这一帧的骨骼摆好：每圈截面的中心、标架，再按截面参数放顶点，最后算法线
-    function posePart(pt, Fr, blend) {
-      const P = Fr.ch[pt.name], n = pt.rings.length, nt = pt.nt, pos = pt.pos, C = [], T = [];
+    // 一段身体每圈截面这一帧的中心 c、切线 t、标架 X/Y、粗细缩放 sc，和躯干上部跟着两肩斜过去的比例 wl（posePart 放顶点、全身模型的骨头都用）
+    function ringFrames(pt, Fr, blend) {
+      const P = Fr.ch[pt.name], n = pt.rings.length, out = [];
       const limb = pt.kind === 'arm' || pt.kind === 'leg', A = pt.kind === 'arm' ? Fr.top : Fr.bot;
       const w = l => add3(add3(mul3(A[0], l[0]), mul3(A[1], l[1])), mul3(A[2], l[2])), T0 = limb ? w(pt.root.T) : null;
       // 胳膊、腿根上往外延的那几圈（三角肌顶、大腿根）挂在肩、胯上：方向大体按立绘里的方向（只跟着骨头转四分之一），
@@ -1322,8 +1322,7 @@ const VIZ = (() => {
       const Tc = limb ? norm3(lerp3(T0, norm3(sub3(P[1], P[0])), 0.25)) : null, g = Fr.fac ? Fr.fac.len : 1;
       let X, Y, prevT;
       for (let i = 0; i < n; i++) {
-        const [k, v, ox0, oy0, rx0, ry0, tw] = pt.rings[i], sc = ringScale(pt.kind, k, v, Fr.fac);
-        const ox = ox0 * sc, oy = oy0 * sc, rx = rx0 * sc, ry = ry0 * sc;
+        const [k, v, , , , , tw] = pt.rings[i], sc = ringScale(pt.kind, k, v, Fr.fac);
         let [c, t] = chainAt(P, k, k < 0 || k >= P.length - 1 ? v * g : v, blend);
         if (limb && k < 0) { c = add3(P[0], mul3(Tc, v * g)); t = Tc; }
         else if (limb && k === 0 && v < 0.4) t = norm3(lerp3(Tc, t, ease(v / 0.4)));
@@ -1332,11 +1331,22 @@ const VIZ = (() => {
         else if (pt.kind === 'foot') { Y = perp3(Fr.up[pt.name], t); X = cross3(t, Y); }
         else if (i === 0) { X = minrot(T0, t, w(pt.root.X)); Y = minrot(T0, t, w(pt.root.Y)); }
         else { X = minrot(prevT, t, X); Y = minrot(prevT, t, Y); }
-        prevT = t; C.push(c); T.push(t);
+        prevT = t;
         // 躯干上部三成按两肩的高低斜过去：肩卷抬起前肩时，那一侧的斜方肌、肩头跟着抬，胳膊根不从肩上冒出来
-        const hf = pt.kind !== 'torso' ? 0 : k < 0 ? 0 : k === 0 ? v : 1 + v * g / Fr.spineL, wl = ease((hf - 0.7) / 0.3);
+        const hf = pt.kind !== 'torso' ? 0 : k < 0 ? 0 : k === 0 ? v : 1 + v * g / Fr.spineL;
+        out.push({ c, t, X, Y, sc, wl: ease((hf - 0.7) / 0.3) });
+      }
+      return out;
+    }
+    // 一段身体按这一帧的骨骼摆好：每圈截面的中心、标架，再按截面参数放顶点，最后算法线
+    function posePart(pt, Fr, blend) {
+      const n = pt.rings.length, nt = pt.nt, pos = pt.pos, F = ringFrames(pt, Fr, blend);
+      for (let i = 0; i < n; i++) {
+        const { c, t, X, Y, sc, wl } = F[i], [, , ox0, oy0, rx0, ry0] = pt.rings[i];
+        const ox = ox0 * sc, oy = oy0 * sc, rx = rx0 * sc, ry = ry0 * sc;
         for (let j = 0; j < nt; j++) {
-          const a = ox + rx * pt.cx[j], b = oy + ry * pt.sy[j], o = (i * nt + j) * 3;
+          const o = (i * nt + j) * 3, L = pt.loc, l = 2 * (i * nt + j);           // loc：头的截面不是超椭圆，每个点的位置直接给
+          const a = L ? L[l] * sc : ox + rx * pt.cx[j], b = L ? L[l + 1] * sc : oy + ry * pt.sy[j];
           const s = wl > 0 ? wl * (a >= 0 ? Fr.lift[0] * Math.min(1.3, a / Fr.half[0]) : Fr.lift[1] * Math.min(1.3, -a / Fr.half[1])) : 0;
           pos[o] = c[0] + X[0] * a + Y[0] * b + t[0] * s; pos[o + 1] = c[1] + X[1] * a + Y[1] * b + t[1] * s; pos[o + 2] = c[2] + X[2] * a + Y[2] * b + t[2] * s;
         }
@@ -1347,11 +1357,32 @@ const VIZ = (() => {
         const a = V(Math.min(n - 1, i + 1), j), b = V(Math.max(0, i - 1), j), e = V(i, j + 1), f = V(i, j - 1), o = V(i, j);
         const ds = [pos[a] - pos[b], pos[a + 1] - pos[b + 1], pos[a + 2] - pos[b + 2]], dt = [pos[e] - pos[f], pos[e + 1] - pos[f + 1], pos[e + 2] - pos[f + 2]];
         let N = norm3(cross3(ds, dt));
-        if (dot3(N, [pos[o] - C[i][0], pos[o + 1] - C[i][1], pos[o + 2] - C[i][2]]) < 0) N = mul3(N, -1);
+        const C = F[i].c;
+        if (dot3(N, [pos[o] - C[0], pos[o + 1] - C[1], pos[o + 2] - C[2]]) < 0) N = mul3(N, -1);
         nor[o] = N[0]; nor[o + 1] = N[1]; nor[o + 2] = N[2];
       }
       const o0 = n * nt * 3;
-      nor.set(mul3(T[0], -1), o0); nor.set(T[n - 1], o0 + 3);
+      nor.set(mul3(F[0].t, -1), o0); nor.set(F[n - 1].t, o0 + 3);
+    }
+    // 全身模型（build_skin.py 把 AI 生成的模型绑在截面上）：每圈截面当一根骨头，这一帧的变换 = 现在的标架 × 立绘站姿里标架的逆。
+    // 截面的粗细缩放乘在截面方向上，顺着骨头的方向按身高缩放；结果是每圈三行 [3×3 | 平移]，传给显卡在顶点着色器里混
+    function poseModel(mesh, Fr) {
+      const B = mesh.bones, g = Fr.fac ? Fr.fac.len : 1;
+      let o = 0;
+      for (const pt of mesh.parts) {
+        const F = ringFrames(pt, Fr, mesh.blend), R = pt.rest;      // rest：每圈 [中心, X, Y, 切线]，立绘站姿下的
+        for (let i = 0; i < F.length; i++, o += 12) {
+          const { c, t, X, Y, sc } = F[i], r = 12 * i;
+          for (let a = 0; a < 3; a++) {
+            let tr = c[a];
+            for (let b = 0; b < 3; b++) {
+              const m = (X[a] * R[r + 3 + b] + Y[a] * R[r + 6 + b]) * sc + t[a] * R[r + 9 + b] * g;
+              B[o + 4 * a + b] = m; tr -= m * R[r + b];
+            }
+            B[o + 4 * a + 3] = tr;
+          }
+        }
+      }
     }
 
     // 没有皮肤的角色：按体型（rig）和配色（LOOK）生成截面，尺寸照 2D 小人的画法
@@ -1404,11 +1435,24 @@ const VIZ = (() => {
     }
 
     const VS = `#version 300 es
-in vec3 aPos; in vec3 aNor; in vec2 aF; in vec2 aS; in vec2 aB; in vec3 aW; in vec3 aCol;
+precision highp float; precision highp sampler2D;
+in vec3 aPos; in vec3 aNor; in vec2 aF; in vec2 aS; in vec2 aB; in vec3 aW; in vec3 aCol; in vec4 aJ; in vec4 aK; in float aL;
 uniform int uMode, uRot; uniform float uCu, uCv, uBase, uR; uniform vec3 uSide; uniform vec4 uBox; uniform vec2 uSize;
+uniform bool uSkin; uniform sampler2D uBones; uniform vec3 uSpine; uniform vec2 uLift;
 out vec2 vF; out vec2 vS; out vec2 vB; out vec3 vW; out vec3 vN; out vec3 vCol;
+// 全身模型：每个顶点挂 4 圈截面（aJ 第几圈、aK 权重），uBones 每圈一行三个像素，是这一帧变换矩阵的三行（poseModel）
+vec3 skin(vec4 p) {
+  vec3 r = vec3(0.0);
+  for (int i = 0; i < 4; i++) {
+    int j = int(aJ[i] + 0.5);
+    r += aK[i] * vec3(dot(texelFetch(uBones, ivec2(0, j), 0), p), dot(texelFetch(uBones, ivec2(1, j), 0), p), dot(texelFetch(uBones, ivec2(2, j), 0), p));
+  }
+  return r;
+}
 void main() {
-  vec3 p = aPos;
+  vec3 p = aPos, nr = aNor;
+  // 躯干上部跟着两肩的高低斜过去（同 posePart）：aL 是这个点的比例，正的跟右肩、负的跟左肩
+  if (uSkin) { p = skin(vec4(aPos, 1.0)) + uSpine * (aL > 0.0 ? aL * uLift.x : -aL * uLift.y); nr = skin(vec4(aNor, 0.0)); }
   float sx, sy, z;
   if (uMode == 1) {             // 侧面机位（sideCam）：训练馆、开场卡
     sx = uSide.x + p.x * uSide.z; sy = uSide.y - p.z * uSide.z - p.y * uSide.z * 0.12; z = clamp(p.y / 8.0, -0.99, 0.99);
@@ -1419,7 +1463,7 @@ void main() {
     sx = uBox.x + uBox.z * 0.5 + (q.x - uCu) * sc; sy = uBox.y + uBox.w * mix(0.95, 0.6, t) - p.z * sc; z = clamp((q.y - uCv) / (uR * 2.0 + 4.0), -0.99, 0.99);
   }
   gl_Position = vec4(sx / uSize.x * 2.0 - 1.0, 1.0 - sy / uSize.y * 2.0, z, 1.0);
-  vF = aF; vS = aS; vB = aB; vW = aW; vN = aNor; vCol = aCol;
+  vF = aF; vS = aS; vB = aB; vW = uSkin ? vec3(1.0, 0.0, 0.0) : aW; vN = nr; vCol = aCol;     // 模型只有一套贴图坐标
 }`;
     const FS = `#version 300 es
 precision highp float;
@@ -1441,8 +1485,51 @@ void main() {
       prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(prog);
       if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
       U = {};
-      for (const n of ['uMode', 'uRot', 'uCu', 'uCv', 'uBase', 'uR', 'uSide', 'uBox', 'uSize', 'uT', 'uTex', 'uLight', 'uFlash']) U[n] = gl.getUniformLocation(prog, n);
+      for (const n of ['uMode', 'uRot', 'uCu', 'uCv', 'uBase', 'uR', 'uSide', 'uBox', 'uSize', 'uT', 'uTex', 'uLight', 'uFlash', 'uSkin', 'uBones', 'uSpine', 'uLift']) U[n] = gl.getUniformLocation(prog, n);
       return true;
+    }
+    const bytes = s => Uint8Array.from(atob(s), ch => ch.charCodeAt(0));
+    // 全身模型上传：顶点按立绘站姿放（位置、法线、贴图坐标、挂哪 4 圈截面和权重、躯干上部的斜肩比例），每帧只传骨头（poseModel）。
+    // 头的三角形排在前面（md.head 个下标），挨重拳闪白只白头
+    function uploadModel(src, tex) {
+      const md = src.model, n = md.n, D = (s, T) => new T(bytes(s).buffer);
+      const q = D(md.pos, Uint16Array), nq = D(md.nor, Int8Array), uq = D(md.uv, Uint16Array), jq = D(md.bone, Uint16Array), wq = D(md.wt, Uint8Array), lq = D(md.lift, Int8Array);
+      const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3);
+      for (let i = 0; i < n * 3; i++) { const a = i % 3; pos[i] = md.lo[a] + q[i] / 65535 * (md.hi[a] - md.lo[a]); nor[i] = nq[i] / 127; }
+      const parts = src.parts.map(p => ({ name: p.name, kind: p.kind, rings: p.rings, root: p.root, rest: p.rest }));
+      const nb = parts.reduce((s, p) => s + p.rings.length, 0);
+      const mesh = { model: true, parts, bind: src.bind, blend: src.blend, tex, nb, bones: new Float32Array(nb * 12), boneTex: gl.createTexture(), head: md.head };
+      gl.bindTexture(gl.TEXTURE_2D, mesh.boneTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      mesh.vao = gl.createVertexArray(); gl.bindVertexArray(mesh.vao);
+      const buf = (name, data, size) => {
+        const b = gl.createBuffer(), at = gl.getAttribLocation(prog, name);
+        gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+        if (at >= 0) { gl.enableVertexAttribArray(at); gl.vertexAttribPointer(at, size, gl.FLOAT, false, 0, 0); }
+      };
+      buf('aPos', pos, 3); buf('aNor', nor, 3); buf('aF', Float32Array.from(uq, x => x / 65535), 2);
+      buf('aJ', Float32Array.from(jq), 4); buf('aK', Float32Array.from(wq, x => x / 255), 4); buf('aL', Float32Array.from(lq, x => x / 127 * 1.3), 1);
+      const idx = D(md.idx, Uint32Array), ib = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+      mesh.count = idx.length;
+      gl.bindVertexArray(null);
+      return mesh;
+    }
+    // 全身模型这一帧的骨头算好传给显卡（贴图单元 1）
+    function skinModel(mesh, Fr) {
+      poseModel(mesh, Fr);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mesh.boneTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 3, mesh.nb, 0, gl.RGBA, gl.FLOAT, mesh.bones);
+      gl.activeTexture(gl.TEXTURE0);
+    }
+    // 画全身模型（骨头已经 skinModel 传过）：头（挨重拳闪白）、身子分两次画
+    function drawModel(mesh, Fr, J) {
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mesh.boneTex); gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(U.uSkin, 1); gl.uniform1i(U.uBones, 1); gl.uniform3fv(U.uSpine, norm3(sub3(J.chest, J.pel))); gl.uniform2fv(U.uLift, Fr.lift);
+      gl.bindVertexArray(mesh.vao);
+      gl.uniform1f(U.uFlash, J.flash ? 0.35 : 0); gl.drawElements(gl.TRIANGLES, mesh.head, gl.UNSIGNED_INT, 0);
+      gl.uniform1f(U.uFlash, 0); gl.drawElements(gl.TRIANGLES, mesh.count - mesh.head, gl.UNSIGNED_INT, mesh.head * 4);
+      gl.uniform1i(U.uSkin, 0);
     }
     // 网格上传到显卡：位置、法线每帧更新，贴图坐标、权重、颜色不变
     function upload(src) {
@@ -1454,17 +1541,19 @@ void main() {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       }
+      if (src.model) return uploadModel(src, mesh.tex);
       for (const p of src.parts) {
-        const nt = p.nt || src.nt, n = p.rings.length, nv = n * nt + 2;
-        const th = j => 2 * Math.PI * j / nt, sg = x => Math.sign(x) * Math.pow(Math.abs(x), 2 / p.e);
-        const pt = { name: p.name, kind: p.kind, rings: p.rings, root: p.root, nt, cx: [], sy: [], pos: new Float32Array(nv * 3), nor: new Float32Array(nv * 3) };
+        // seam：每圈多一列（和第一列同位置），贴图是一张展开图时首尾两列的贴图坐标不一样，不能首尾相接（头）
+        const n0 = p.nt || src.nt, nt = p.seam ? n0 + 1 : n0, n = p.rings.length, nv = n * nt + 2;
+        const th = j => 2 * Math.PI * j / n0, sg = x => Math.sign(x) * Math.pow(Math.abs(x), 2 / p.e);
+        const pt = { name: p.name, kind: p.kind, rings: p.rings, root: p.root, loc: p.loc, nt, cx: [], sy: [], pos: new Float32Array(nv * 3), nor: new Float32Array(nv * 3) };
         for (let j = 0; j < nt; j++) { pt.cx.push(sg(Math.cos(th(j)))); pt.sy.push(sg(Math.sin(th(j)))); }
         const idx = [];
-        for (let i = 0; i < n - 1; i++) for (let j = 0; j < nt; j++) {
+        for (let i = 0; i < n - 1; i++) for (let j = 0; j < n0; j++) {
           const a = i * nt + j, b = i * nt + (j + 1) % nt, c = a + nt, d = b + nt;
           idx.push(a, c, b, b, c, d);
         }
-        for (let j = 0; j < nt; j++) { idx.push(n * nt, (j + 1) % nt, j); idx.push(n * nt + 1, (n - 1) * nt + j, (n - 1) * nt + (j + 1) % nt); }
+        for (let j = 0; j < n0; j++) { idx.push(n * nt, (j + 1) % nt, j); idx.push(n * nt + 1, (n - 1) * nt + j, (n - 1) * nt + (j + 1) % nt); }
         pt.count = idx.length;
         pt.vao = gl.createVertexArray(); gl.bindVertexArray(pt.vao);
         const buf = (name, data, size, usage) => {
@@ -1508,6 +1597,7 @@ void main() {
         const mesh = meshOf(ids[k], Js[k].R), Fr = frameOf(Js[k], mesh.bind);
         gl.uniform1i(U.uTex, mesh.tex ? 1 : 0);
         if (mesh.tex) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, mesh.tex); }
+        if (mesh.model) { skinModel(mesh, Fr); drawModel(mesh, Fr, Js[k]); continue; }
         for (const pt of mesh.parts) {
           posePart(pt, Fr, mesh.blend);
           gl.uniform1f(U.uFlash, pt.kind === 'head' && Js[k].flash ? 0.35 : 0);    // 头部挨了重拳那一下脸上一白（同 2D 的 flash）
