@@ -2,7 +2,7 @@
 
 模型是拿同一张三视图立绘生成的，站姿和立绘一样：按轮廓对齐到立绘的坐标（米），每个顶点挂到最近那段身体的两圈截面上
 （截面就是骨头：画面里每圈截面怎么摆，挂在上面的顶点就怎么跟着动）。肩、脖子、脚踝这几处两段身体交界，
-沿着网格表面往两边各渐变几厘米，弯的时候不裂、不折。胯按位置渐变（见 HIP）。
+沿着网格表面往两边各渐变几厘米，弯的时候不裂、不折。胯按位置渐变（见 HIP），短裤底下看不见的几层收进去或删掉（见 HIDE_KEEP）。
 """
 import base64
 import io
@@ -21,6 +21,16 @@ BAND = {("arm", "torso"): 0.05, ("head", "torso"): 0.04, ("foot", "leg"): 0.03}
 # 胯（躯干和两条大腿）按位置渐变，不按表面：短裤里面还有一层大腿的皮（离短裤一厘米），按表面量两层的权重不一样，
 # 腿一抬大腿就从短裤里戳出来。顺着大腿从胯关节往上 9 厘米到往下 9 厘米，躯干渐变到腿；中线左右 3 厘米，两条腿互相渐变
 HIP = (0.09, 0.03)
+# 短裤底下看不见的那几层：短裤里子（布的反面，离布面一两毫米，贴图是皮色）、大腿和裆里的皮（再往里一两厘米）。
+# 大腿一抬胯前挤成一团、两腿一分裆部拉开，蒙皮混出来的位置一差就互相穿过去，皮色从侧缝、胯前、裆部露出来。
+# 腰头到裤脚之间，从四周 HIDE_VIEWS 这些方向都看不见的点：里子（法线朝着身体中心）删掉，折缝里透出来的是布的反面；
+# 皮不删，往中心收 HIDE_SHRINK 米——倒地时镜头从脚那头往裤腿里看得进去，删了大腿就在裤腿里断了。
+# 离看得见的地方沿表面 HIDE_KEEP 米以内的里子不删；皮离看得见的地方越远收得越多，HIDE_FADE 米收满
+# （渐变短了，模型里看不见的地方三角形大，相邻两个点一个收满一个没收，往裤腿里看大腿一截一截的）
+HIDE_VIEWS = [(el, az) for el in (-10, 15, 40) for az in range(0, 360, 30)]        # （仰角、方位角）度
+HIDE_KEEP = 0.03
+HIDE_FADE = 0.10
+HIDE_SHRINK = 0.04
 EASE = lambda t: np.where(t < 0, 0, np.where(t > 1, 1, t * t * (3 - 2 * t)))      # 同 viz.js 的 ease
 
 
@@ -55,6 +65,44 @@ def read_glb(path):
     at = pr["attributes"]
     return acc(at["POSITION"], np.float32, 3).astype(float), acc(at["NORMAL"], np.float32, 3).astype(float), \
         acc(at["TEXCOORD_0"], np.float32, 2).astype(float), idx, img
+
+
+def seen_from(P, N, tri, test, px=0.003, eps=0.003):
+    """test 里的点从 HIDE_VIEWS 各个方向正交着看，有没有哪个方向看得见：朝着镜头，前面没被 tri 挡住（逐像素深度，px 米一个像素）。"""
+    seen = np.zeros(len(test), bool)
+    used = np.unique(tri)
+    for el, az in HIDE_VIEWS:
+        e, a = np.radians(el), np.radians(az)
+        d = np.array([np.cos(e) * np.cos(a), np.cos(e) * np.sin(a), -np.sin(e)])          # 视线方向
+        u = np.array([-np.sin(a), np.cos(a), 0.0])
+        x, y, z = P @ u / px, P @ np.cross(u, d) / px, P @ d
+        x, y = x - x[used].min() + 2, y - y[used].min() + 2
+        W, H = int(x[used].max()) + 3, int(y[used].max()) + 3
+        zb = np.full(W * H, np.inf)
+        tx, ty, tz = x[tri], y[tri], z[tri]
+        x0, y0 = np.floor(tx.min(1)).astype(int), np.floor(ty.min(1)).astype(int)
+        size = np.maximum(np.ceil(tx.max(1)) - x0, np.ceil(ty.max(1)) - y0).astype(int) + 1
+        lo = 0
+        for k in (3, 5, 8, 12, 20, 34, 60, 120, 400):         # 按三角形在画面上占多大分批，一批一起算盖住哪些像素
+            i = np.where((size > lo) & (size <= k))[0]
+            lo = k
+            if not len(i):
+                continue
+            gx, gy = np.meshgrid(np.arange(k), np.arange(k))
+            qx, qy = x0[i, None] + gx.ravel() + 0.5, y0[i, None] + gy.ravel() + 0.5
+            (ax, bx, cx), (ay, by, cy) = tx[i].T[..., None], ty[i].T[..., None]
+            den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
+            den = np.where(np.abs(den) < 1e-12, 1e-12, den)
+            w0 = ((by - cy) * (qx - cx) + (cx - bx) * (qy - cy)) / den
+            w1 = ((cy - ay) * (qx - cx) + (ax - cx) * (qy - cy)) / den
+            ok = (w0 >= -1e-6) & (w1 >= -1e-6) & (w0 + w1 <= 1 + 1e-6) & (qx < W) & (qy < H)
+            zz = w0 * tz[i, 0, None] + w1 * tz[i, 1, None] + (1 - w0 - w1) * tz[i, 2, None]
+            np.minimum.at(zb, (qy.astype(int) * W + qx.astype(int))[ok], zz[ok])
+        zb = np.pad(zb.reshape(H, W), 1, constant_values=np.inf)
+        xi, yi = np.clip(x[test].astype(int), 0, W - 1), np.clip(y[test].astype(int), 0, H - 1)
+        back = np.max([zb[yi + dy, xi + dx] for dy in range(3) for dx in range(3)], 0)       # 周围 3×3 取最远的：贴着轮廓边不算被挡
+        seen |= (z[test] <= back + eps) & (N[test] @ d < -0.05)
+    return seen
 
 
 class Model:
@@ -197,6 +245,38 @@ class Model:
         a = ((P - f["C"][i]) * f["X"][i]).sum(1)
         half = np.where(a >= 0, lift["half"][0], lift["half"][1])
         self.lift = np.sign(a) * wt_torso * ((1 - al) * wl[i] + al * wl[j]) * np.minimum(1.3, np.abs(a) / half)
+        self.shrunk, self.dropped = self.hide_inner(hipz & np.isin(label, [t, lR, lL]), label, (t, lR, lL), G, weld)
+
+    def hide_inner(self, zone, label, parts, G, weld):
+        """短裤底下看不见的那几层（HIDE_SHRINK）：里子删掉，皮往中心收，返回收了几个、删了几个顶点。中心线：躯干上的点是骨盆到两肩中点，
+        腿上的点是胯关节到膝盖。躯干和两条腿一起挡着看：立绘站姿里大腿内侧被另一条腿挡住的地方，离看得见的地方（两腿之间露出的那一截）
+        沿表面很近，不动。"""
+        P, N, rg, J = self.P, self.N, self.rg, self.rg.J
+        zlo, zhi = rg.z_of_row(rg.rows["hem"]) - 0.04, rg.z_of_row(rg.rows["waist"]) + 0.04
+        occ = zone & (P[:, 2] > zlo - 0.25) & (P[:, 2] < zhi + 0.25)
+        test = np.where(zone & (P[:, 2] > zlo) & (P[:, 2] < zhi))[0]
+        ok = seen_from(P, N, self.tri[occ[self.tri].all(1)], test)
+        hid = test[~ok]
+        dist = csgraph.dijkstra(G, directed=False, indices=np.unique(weld[test[ok]]), min_only=True, limit=HIDE_FADE)[weld[hid]]
+        fade = EASE(np.minimum(dist, HIDE_FADE) / HIDE_FADE)[:, None]          # 超出 limit 的距离是 inf
+        r = np.zeros((len(hid), 3))                        # 从中心线指到这个点
+        for p, (a, b) in zip(parts, ((J["pel"], J["chest"]), (J["hipR"], J["knR"]), (J["hipL"], J["knL"]))):
+            m = label[hid] == p
+            u = (b - a) / np.linalg.norm(b - a)
+            r[m] = (P[hid[m]] - a) - ((P[hid[m]] - a) @ u)[:, None] * u
+        rn = np.linalg.norm(r, axis=1, keepdims=True) + 1e-9
+        lining = (N[hid] * r).sum(1) < 0                   # 法线朝着中心：布的反面
+        skin = ~lining
+        P[hid[skin]] -= (r / rn * np.minimum(HIDE_SHRINK * fade, rn / 2))[skin]
+        hide = np.zeros(len(P), bool)
+        hide[hid[lining & (dist >= HIDE_KEEP)]] = True
+        tri = self.tri[~hide[self.tri].all(1)]
+        keep = np.zeros(len(P), bool)
+        keep[tri] = True
+        self.tri = (np.cumsum(keep) - 1)[tri]
+        for a in ("P", "N", "uv", "label", "bone", "wt", "lift"):
+            setattr(self, a, getattr(self, a)[keep])
+        return int(skin.sum()), int((~keep).sum())
 
     # ---- 写进皮肤
     def export(self):

@@ -574,7 +574,7 @@ def build(rid, debug=None):
         cnt = np.bincount(model.label, minlength=len(parts))
         print(f"{path}：全身模型 {mdl['n']} 个顶点、{len(model.tri)} 个三角面，挂在 {sum(len(p['rings']) for p in parts)} 圈截面上，"
               f"{os.path.getsize(path) / 1e6:.2f} MB；模型缩放 {model.scale:.3f}；各段顶点 "
-              + "、".join(f"{p['name']} {c}" for p, c in zip(parts, cnt)))
+              + "、".join(f"{p['name']} {c}" for p, c in zip(parts, cnt)) + f"；短裤底下看不见的：皮 {model.shrunk} 个顶点往里收，里子删了 {model.dropped} 个")
     else:
         nv = sum(len(p["w"]) // 3 for p in parts)
         print(f"{path}：{len(parts)} 段、{nv} 个顶点，{os.path.getsize(path) / 1e6:.2f} MB；身高 {body_H(b):.3f} 米，立绘 {S:.0f} 像素/米")
